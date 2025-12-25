@@ -28,19 +28,18 @@ function Get-CurrentScriptPath {
 }
 
 function Get-VersionFromFile($path) {
-    if (-not (Test-Path $path)) { return $null }
-    if ($path.ToLower().EndsWith(".ps1")) {
-        $content = Get-Content $path -Raw
-        if ($content -match '\$ScriptVersion\s*=\s*''(?<version>[\d\.]+)''') {
-            return $Matches['version']
-        }
-    }
-    elseif ($path.ToLower().EndsWith(".exe")) {
+    if (-not (Test-Path $path)) { return "0.0.0" }
+    Start-Sleep -Milliseconds 200
+    try {
+        $text = [IO.File]::ReadAllText($path)
+        if ($text -match 'ScriptVersion.*?(?<v>\d+\.\d+\.\d+)') { return $Matches.v }
+        if ($text -match '(?<v>\d+\.\d+\.\d+)') { return $Matches.v }
+        
         $gi = Get-Item $path
-        if ($gi.VersionInfo.ProductVersion) { return $gi.VersionInfo.ProductVersion }
-        if ($gi.VersionInfo.FileVersion) { return $gi.VersionInfo.FileVersion }
-    }
-    return '0.0.0'
+        if ($gi.VersionInfo.ProductVersion) { return $gi.VersionInfo.ProductVersion.Trim() }
+        if ($gi.VersionInfo.FileVersion) { return $gi.VersionInfo.FileVersion.Trim() }
+    } catch { }
+    return "0.0.0"
 }
 
 function Invoke-SelfUpdate {
@@ -323,6 +322,7 @@ function Invoke-AuthenticatedUpdate {
         else {
             Get-PrivateReleaseAsset -Owner $Owner -Repo $Repo -AssetName $AssetName -Token $Token -OutFile $temp
         }
+        Start-Sleep -Milliseconds 200
     }
     catch {
         Write-Warning "Failed to download private asset: $_"
