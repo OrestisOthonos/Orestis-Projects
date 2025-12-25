@@ -2,10 +2,22 @@
 # This script prompts the user for Zoiper 5 credentials.
 
 # --- Self-update configuration ---
-# Set `UpdateUrl` to the raw URL where the latest `ZoiperSetup.ps1` is published (e.g., GitHub raw)
+# Set `UpdateUrl` to your public release download URL or leave empty and use the
+# authenticated update function below for private releases.
 $ScriptUpdateConfig = @{ 
-    UpdateUrl = 'https://example.com/ZoiperSetup.ps1' # <-- change this to your hosted raw script URL
-    AutoCheck  = $false # Set to $true to check for updates automatically on start
+    # Example public releases URL:
+    # 'https://github.com/OWNER/REPO/releases/latest/download/ZoiperConfigurator.exe'
+    UpdateUrl   = '' 
+    
+    # Private GitHub Repo Configuration (Used for authenticated updates)
+    GitHubOwner = 'OrestisOthonos' 
+    GitHubRepo  = 'Orestis-Projects' 
+    # If GitHubPath is set, it will download directly from the repo tree (folders)
+    GitHubPath  = 'ZoiperConfigurator/Releases/1.0/Zoiper Configurator.exe'
+    # If GitHubPath is empty, it will look for a Release asset named AssetName
+    AssetName   = 'Zoiper Configurator.exe'
+    
+    AutoCheck   = $true # Set to $true to check for updates automatically on start
 }
 
 function Get-CurrentScriptPath {
@@ -14,7 +26,7 @@ function Get-CurrentScriptPath {
     return $null
 }
 
-function Get-FileHashSha256($path){
+function Get-FileHashSha256($path) {
     if (-not (Test-Path $path)) { return $null }
     return (Get-FileHash -Path $path -Algorithm SHA256).Hash
 }
@@ -22,26 +34,23 @@ function Get-FileHashSha256($path){
 function Invoke-SelfUpdate {
     param(
         [string]$UpdateUrl,
-        [switch]$RestartAfterUpdate
+        [switch]$RestartAfterUpdate,
+        [switch]$Force
     )
 
     if (-not $UpdateUrl) { Write-Verbose "No UpdateUrl configured."; return }
 
-    # Determine if running as an exe and the target path to replace
     $proc = [System.Diagnostics.Process]::GetCurrentProcess()
     $currentProcessPath = $proc.MainModule.FileName
     $isExeRun = $currentProcessPath -and ($currentProcessPath.ToLower().EndsWith('.exe'))
 
-    if ($isExeRun) {
-        $targetPath = $currentProcessPath
-    }
+    if ($isExeRun) { $targetPath = $currentProcessPath }
     else {
         $scriptPath = Get-CurrentScriptPath
         if (-not $scriptPath) { Write-Warning "Cannot determine current script path. Self-update aborted."; return }
         $targetPath = $scriptPath
     }
 
-    # Choose temp file extension based on update URL or target type
     $ext = if ($UpdateUrl.ToLower().EndsWith('.exe') -or $isExeRun) { '.exe' } else { '.ps1' }
     $temp = Join-Path $env:TEMP ([IO.Path]::GetRandomFileName() + $ext)
 
@@ -49,20 +58,20 @@ function Invoke-SelfUpdate {
         Invoke-WebRequest -Uri $UpdateUrl -OutFile $temp -UseBasicParsing -ErrorAction Stop
     }
     catch {
-        Write-Warning "Failed to download update from $UpdateUrl: $_"
+        Write-Warning "Failed to download update from $($UpdateUrl): $_"
         return
     }
 
     $localHash = Get-FileHashSha256 $targetPath
     $remoteHash = Get-FileHashSha256 $temp
 
-    if (($localHash -and $remoteHash) -and ($localHash -ne $remoteHash)) {
-        Write-Host "Update found — installing..." -ForegroundColor Cyan
+    if (($localHash -and $remoteHash) -and (($localHash -ne $remoteHash) -or $Force)) {
+        if ($Force -and ($localHash -eq $remoteHash)) { Write-Host "Forcing re-installation..." -ForegroundColor Yellow }
+        else { Write-Host "Update found — installing..." -ForegroundColor Cyan }
 
         $updaterPath = Join-Path $env:TEMP ("zoiper_updater_" + [IO.Path]::GetRandomFileName() + ".ps1")
         $parentPid = $PID
 
-        # Updater script: wait for parent to exit, replace target, optionally restart
         $updaterScript = @"
 param(
     [string]
@@ -77,19 +86,9 @@ param(
 
 while (Get-Process -Id `$ParentPid -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 300 }
 
-try {
-    if (Test-Path -Path `$Target) {
-        Remove-Item -Path `$Target -Force -ErrorAction Stop
-    }
-}
-catch { }
-
+try { if (Test-Path -Path `$Target) { Remove-Item -Path `$Target -Force -ErrorAction Stop } } catch { }
 Copy-Item -Path `$Source -Destination `$Target -Force
-
-if (`$Restart) {
-    Start-Process -FilePath `$Target
-}
-
+if (`$Restart) { Start-Process -FilePath `$Target }
 Remove-Item -Path `$Source -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 200
 Remove-Item -Path `$MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue
@@ -97,23 +96,226 @@ Remove-Item -Path `$MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue
 
         $updaterScript | Out-File -FilePath $updaterPath -Encoding UTF8
 
-        $args = @('-NoProfile','-ExecutionPolicy','Bypass','-File', $updaterPath, '--','-Target', $targetPath, '-Source', $temp, '-ParentPid', $parentPid)
-        if ($RestartAfterUpdate) { $args += '-Restart' }
+        $processArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $updaterPath, '--', '-Target', $targetPath, '-Source', $temp, '-ParentPid', $parentPid)
+        if ($RestartAfterUpdate) { $processArgs += '-Restart' }
 
-        Start-Process -FilePath 'powershell' -ArgumentList $args -WindowStyle Hidden
+        Start-Process -FilePath 'powershell' -ArgumentList $processArgs -WindowStyle Hidden
 
         Write-Host "Updater launched; exiting to allow replacement." -ForegroundColor Yellow
         exit
     }
     else {
-        Write-Host "Script/EXE is already up to date." -ForegroundColor Green
         Remove-Item -Path $temp -ErrorAction SilentlyContinue
+        return $false
     }
 }
 
-# Optionally perform auto-check on start
+# --- Helpers for private GitHub releases (PAT support) ---
+function Get-GitHubToken {
+    param(
+        [string]$VaultEntryName = 'GitHubPAT'
+    )
+
+    if ($env:GITHUB_PAT) { return $env:GITHUB_PAT }
+
+    if (Get-Command -Name Get-StoredCredential -ErrorAction SilentlyContinue) {
+        try {
+            $stored = Get-StoredCredential -Target $VaultEntryName -ErrorAction SilentlyContinue
+            if ($stored -and $stored.Password) { return $stored.Password }
+        }
+        catch { }
+    }
+
+    return $null
+}
+
+# If no PAT is present in the environment, offer a one-time interactive paste
+
+# Optional embedded DPAPI-encrypted PAT (user-scoped).
+$EncryptedPAT = '01000000d08c9ddf0115d1118c7a00c04fc297eb01000000eba8995160e5a84da0c072cc844b5c280000000002000000000010660000000100002000000001912b6220a5dc0002841fccf7f6e5e605b10f69b7753cf9c2560c45ced65425000000000e80000000020000200000005be30710f0167d3f7f89ab2caca1feadc0af5399a1a51dcb96d86df21dbe79a6c00000009b93e83e67a5473e37eb5a5c63c48f82056a5dade556d22d3c903fa07841d9cc3a5cb2daf3bd7365bbc5b981cf67941e5c5b6ace639fb73271d7fa38d01556a89f6ed655bf1963028c7eb3a69f50e77f4cce03f9c70473030ebc39fd2edf8690e763efca4100b6b28073eedc57c978a62af92f5a90ed83e509ace42be76f441c5c73d3c898016f879fbd4de61da889c0d1bf893b2686c36a544d77b62caf1bfcbb3013ceec8a2929492d44a93c39f67631f7d311a537a6bb6817b4a3aa1b53d340000000f91247e3d9b143d3647dabc48920ce7b1abe36acc37ec35a47ed606d9c9e3e807cfe2180e770919d01918b44a799a85135c10434add807786d4ac1c5f98b6328'
+
+if ($EncryptedPAT -and $EncryptedPAT -ne 'PASTE_ENCRYPTED_STRING_HERE') {
+    try {
+        $secure = ConvertTo-SecureString -String $EncryptedPAT
+        $plain = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
+        if ($plain) {
+            # Priority: use embedded PAT if it's the one we just updated
+            $env:GITHUB_PAT = $plain
+            Write-Host "GITHUB_PAT loaded successfully from embedded blob." -ForegroundColor Green
+        }
+    }
+    catch {
+        Write-Warning "Failed to decrypt embedded PAT: $_"
+    }
+}
+elseif ($env:GITHUB_PAT) {
+    Write-Host "Using GITHUB_PAT from environment variable." -ForegroundColor Cyan
+}
+else {
+    Write-Host "No GITHUB_PAT found in environment or embedded." -ForegroundColor Red
+}
+
+function Get-PrivateReleaseAsset {
+    param(
+        [string]$Owner,
+        [string]$Repo,
+        [string]$AssetName,
+        [string]$Token,
+        [string]$OutFile
+    )
+
+    if (-not $Token) { throw 'Token is required to download private release asset' }
+
+    # GitHub fine-grained PATs work with "token" as well, and it's often more compatible.
+    $authPrefix = if ($Token.StartsWith("github_pat_")) { "Bearer" } else { "token" }
+    $headers = @{ Authorization = "$authPrefix $Token"; 'User-Agent' = 'ZoiperUpdater'; Accept = 'application/vnd.github+json' }
+    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Owner/$Repo/releases/latest" -Headers $headers -ErrorAction Stop
+
+    $asset = $release.assets | Where-Object { $_.name -eq $AssetName }
+    if (-not $asset) { throw "Asset not found in latest release: $AssetName" }
+
+    $assetId = $asset.id
+    $downloadUri = "https://api.github.com/repos/$Owner/$Repo/releases/assets/$assetId"
+
+    $dlHeaders = @{ Authorization = "$authPrefix $Token"; 'User-Agent' = 'ZoiperUpdater'; Accept = 'application/octet-stream' }
+    Invoke-WebRequest -Uri $downloadUri -Headers $dlHeaders -OutFile $OutFile -UseBasicParsing -Method Get -ErrorAction Stop
+}
+
+function Get-PrivateRepoContent {
+    param(
+        [string]$Owner,
+        [string]$Repo,
+        [string]$Path,
+        [string]$Token,
+        [string]$OutFile
+    )
+
+    if (-not $Token) { throw 'Token is required to download private repo content' }
+
+    $authPrefix = if ($Token.StartsWith("github_pat_")) { "Bearer" } else { "token" }
+    # Use the Contents API with the 'raw' media type to get the file content directly
+    $headers = @{ 
+        Authorization = "$authPrefix $Token"
+        'User-Agent'  = 'ZoiperUpdater'
+        Accept        = 'application/vnd.github.v3.raw'
+    }
+    
+    # Encode the path segments to handle spaces while keeping slashes literal for the URI
+    $segments = $Path.Split('/') | ForEach-Object { [Uri]::EscapeDataString($_) }
+    $encodedPath = $segments -join '/'
+    $uri = "https://api.github.com/repos/$Owner/$Repo/contents/$encodedPath"
+    
+    Write-Host "Downloading: $Path..." -ForegroundColor Gray
+    Invoke-WebRequest -Uri $uri -Headers $headers -OutFile $OutFile -UseBasicParsing -Method Get -ErrorAction Stop
+}
+
+function Invoke-AuthenticatedUpdate {
+    param(
+        [string]$Owner,
+        [string]$Repo,
+        [string]$AssetName,
+        [string]$Path,
+        [switch]$RestartAfterUpdate,
+        [string]$Token,
+        [switch]$Force
+    )
+
+    if (-not $Token) { $Token = Get-GitHubToken }
+
+    $proc = [System.Diagnostics.Process]::GetCurrentProcess()
+    $currentProcessPath = $proc.MainModule.FileName
+    $isExeRun = $currentProcessPath -and ($currentProcessPath.ToLower().EndsWith('.exe'))
+
+    if ($isExeRun) { $targetPath = $currentProcessPath }
+    else {
+        $scriptPath = Get-CurrentScriptPath
+        if (-not $scriptPath) { Write-Warning "Cannot determine current script path. Authenticated update aborted."; return }
+        $targetPath = $scriptPath
+    }
+
+    $ext = if ($targetPath.ToLower().EndsWith('.exe')) { '.exe' } else { '.ps1' }
+    $temp = Join-Path $env:TEMP ([IO.Path]::GetRandomFileName() + $ext)
+
+    try {
+        if ($Path) {
+            Get-PrivateRepoContent -Owner $Owner -Repo $Repo -Path $Path -Token $Token -OutFile $temp
+        }
+        else {
+            Get-PrivateReleaseAsset -Owner $Owner -Repo $Repo -AssetName $AssetName -Token $Token -OutFile $temp
+        }
+    }
+    catch {
+        Write-Warning "Failed to download private asset: $_"
+        return
+    }
+
+    $localHash = Get-FileHashSha256 $targetPath
+    $remoteHash = Get-FileHashSha256 $temp
+
+    Write-Host "Local Hash:  $($localHash.Substring(0, 8))..." -ForegroundColor Gray
+    Write-Host "Remote Hash: $($remoteHash.Substring(0, 8))..." -ForegroundColor Gray
+
+    if (($localHash -and $remoteHash) -and (($localHash -ne $remoteHash) -or $Force)) {
+        if ($Force -and ($localHash -eq $remoteHash)) { Write-Host "Forcing re-installation..." -ForegroundColor Yellow }
+        else { Write-Host "Authenticated update found — installing..." -ForegroundColor Cyan }
+
+        $updaterPath = Join-Path $env:TEMP ("zoiper_updater_" + [IO.Path]::GetRandomFileName() + ".ps1")
+        $parentPid = $PID
+
+        $updaterScript = @"
+param(
+    [string]
+    `$Target,
+    [string]
+    `$Source,
+    [int]
+    `$ParentPid,
+    [switch]
+    `$Restart
+)
+
+while (Get-Process -Id `$ParentPid -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 300 }
+
+try { if (Test-Path -Path `$Target) { Remove-Item -Path `$Target -Force -ErrorAction Stop } } catch { }
+Copy-Item -Path `$Source -Destination `$Target -Force
+if (`$Restart) { Start-Process -FilePath `$Target }
+Remove-Item -Path `$Source -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 200
+Remove-Item -Path `$MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue
+"@
+
+        $updaterScript | Out-File -FilePath $updaterPath -Encoding UTF8
+
+        $processArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $updaterPath, '--', '-Target', $targetPath, '-Source', $temp, '-ParentPid', $parentPid)
+        if ($RestartAfterUpdate) { $processArgs += '-Restart' }
+
+        Start-Process -FilePath 'powershell' -ArgumentList $processArgs -WindowStyle Hidden
+
+        Write-Host "Updater launched; exiting to allow replacement." -ForegroundColor Yellow
+        exit
+    }
+    else {
+        Remove-Item -Path $temp -ErrorAction SilentlyContinue
+        return $false
+    }
+}
+
+# Auto-check if configured
 if ($ScriptUpdateConfig.AutoCheck -eq $true) {
-    Invoke-SelfUpdate -UpdateUrl $ScriptUpdateConfig.UpdateUrl
+    Write-Host "Checking for updates..." -ForegroundColor Cyan
+    if ($ScriptUpdateConfig.UpdateUrl) {
+        Invoke-SelfUpdate -UpdateUrl $ScriptUpdateConfig.UpdateUrl
+    }
+    elseif ($ScriptUpdateConfig.GitHubOwner -and $ScriptUpdateConfig.GitHubRepo) {
+        # Note: If an update happens here, script will exit. 
+        # For auto-check, we usually want it to stay silent if failed.
+        try {
+            Invoke-AuthenticatedUpdate -Owner $ScriptUpdateConfig.GitHubOwner -Repo $ScriptUpdateConfig.GitHubRepo -AssetName $ScriptUpdateConfig.AssetName -Path $ScriptUpdateConfig.GitHubPath
+        }
+        catch {
+            Write-Host "Update check skipped: $($_.Exception.Message)" -ForegroundColor Gray
+        }
+    }
 }
 
 Write-Host "Starting Zoiper 5 Setup..." -ForegroundColor Cyan
@@ -124,6 +326,8 @@ Write-Host "Starting Zoiper 5 Setup..." -ForegroundColor Cyan
 # Load Windows Forms assembly
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+
+Write-Host "Initializing UI components..." -ForegroundColor Cyan
 
 # Create function to easily create styled labels
 function New-StyledLabel ($text, $top, $isHeader = $false) {
@@ -218,7 +422,7 @@ if (Get-Process -Name "Zoiper5" -ErrorAction SilentlyContinue) {
 # Create the form
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Zoiper 5 Setup"
-$form.Size = New-Object System.Drawing.Size(400, 320)
+$form.Size = New-Object System.Drawing.Size(400, 345)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
@@ -226,32 +430,65 @@ $form.MinimizeBox = $true
 $form.ShowInTaskbar = $true
 $form.BackColor = [System.Drawing.Color]::White
 
+# Button: Check for Updates (Top-Left, Small)
+$updateButton = New-StyledButton "Check for Updates" 5 5 $false
+$updateButton.Size = New-Object System.Drawing.Size(110, 22)
+$updateButton.Font = New-Object System.Drawing.Font("Segoe UI", 7)
+$form.Controls.Add($updateButton)
+
+$updateButton.Add_Click({
+        $updated = $false
+        if ($ScriptUpdateConfig.UpdateUrl) {
+            $updated = Invoke-SelfUpdate -UpdateUrl $ScriptUpdateConfig.UpdateUrl -RestartAfterUpdate
+        }
+        elseif ($ScriptUpdateConfig.GitHubOwner -and $ScriptUpdateConfig.GitHubRepo) {
+            $updated = Invoke-AuthenticatedUpdate -Owner $ScriptUpdateConfig.GitHubOwner -Repo $ScriptUpdateConfig.GitHubRepo -AssetName $ScriptUpdateConfig.AssetName -Path $ScriptUpdateConfig.GitHubPath -RestartAfterUpdate
+        }
+        else {
+            [System.Windows.Forms.MessageBox]::Show("No update source (URL or GitHub Repo) configured.", "Update Check", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            return
+        }
+
+        if ($updated -eq $false) {
+            $msg = "You are currently on the latest version. Would you like to force an update anyway?"
+            $res = [System.Windows.Forms.MessageBox]::Show($msg, "Update Check", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
+            if ($res -eq [System.Windows.Forms.DialogResult]::Yes) {
+                if ($ScriptUpdateConfig.UpdateUrl) {
+                    Invoke-SelfUpdate -UpdateUrl $ScriptUpdateConfig.UpdateUrl -RestartAfterUpdate -Force
+                }
+                else {
+                    Invoke-AuthenticatedUpdate -Owner $ScriptUpdateConfig.GitHubOwner -Repo $ScriptUpdateConfig.GitHubRepo -AssetName $ScriptUpdateConfig.AssetName -Path $ScriptUpdateConfig.GitHubPath -RestartAfterUpdate -Force
+                }
+            }
+        }
+    })
+
 # Header
-$header = New-StyledLabel "Zoiper 5 Configuration" 20 $true
+$header = New-StyledLabel "Zoiper 5 Configuration" 45 $true
 $form.Controls.Add($header)
 
-$subHeader = New-StyledLabel "Please enter your extension details below." 50
+$subHeader = New-StyledLabel "Please enter your extension details below." 75
 $subHeader.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 $form.Controls.Add($subHeader)
 
 # Label: Extension Number
-$labelExtension = New-StyledLabel "Extension Number" 90
+$labelExtension = New-StyledLabel "Extension Number" 115
 $form.Controls.Add($labelExtension)
 
 # TextBox: Extension Number
 $textBoxExtension = New-Object System.Windows.Forms.TextBox
-$textBoxExtension.Location = New-Object System.Drawing.Point(25, 115)
+$textBoxExtension.Location = New-Object System.Drawing.Point(25, 140)
 $textBoxExtension.Size = New-Object System.Drawing.Size(330, 26)
 $textBoxExtension.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($textBoxExtension)
 
 # Label: Password
-$labelPassword = New-StyledLabel "Password" 155
+$labelPassword = New-StyledLabel "Password" 180
 $form.Controls.Add($labelPassword)
 
 # TextBox: Password
 $textBoxPassword = New-Object System.Windows.Forms.TextBox
-$textBoxPassword.Location = New-Object System.Drawing.Point(25, 180)
+$textBoxPassword.Location = New-Object System.Drawing.Point(25, 205)
 $textBoxPassword.Size = New-Object System.Drawing.Size(330, 26)
 $textBoxPassword.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $textBoxPassword.PasswordChar = "●"
@@ -259,14 +496,14 @@ $form.Controls.Add($textBoxPassword)
 
 # Separator line
 $line = New-Object System.Windows.Forms.Label
-$line.Location = New-Object System.Drawing.Point(0, 230)
+$line.Location = New-Object System.Drawing.Point(0, 255)
 $line.Size = New-Object System.Drawing.Size(400, 1)
 $line.BackColor = [System.Drawing.Color]::FromArgb(220, 220, 220)
 $form.Controls.Add($line)
 
 # Button Panel Background
 $buttonPanel = New-Object System.Windows.Forms.Panel
-$buttonPanel.Location = New-Object System.Drawing.Point(0, 231)
+$buttonPanel.Location = New-Object System.Drawing.Point(0, 256)
 $buttonPanel.Size = New-Object System.Drawing.Size(400, 50)
 $buttonPanel.BackColor = [System.Drawing.Color]::FromArgb(245, 245, 245)
 $form.Controls.Add($buttonPanel)
