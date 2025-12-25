@@ -15,9 +15,11 @@ The user can type 'A' to approve the deletion of all subsequent orphaned profile
 Requires administrative privileges to run.
 #>
 
+
 # Requires elevated privileges
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Error "This script must be run with Administrator privileges."
+    Add-Type -AssemblyName PresentationFramework
+    [System.Windows.MessageBox]::Show("This script must be run as Administrator.", "Error", 'OK', 'Error') | Out-Null
     exit 1
 }
 
@@ -27,120 +29,126 @@ function Test-SidResolution {
         [Parameter(Mandatory=$true)]
         [string]$SID
     )
-    # Use the [System.Security.Principal.SecurityIdentifier] class to try and translate the SID.
     try {
         $SecurityIdentifier = New-Object System.Security.Principal.SecurityIdentifier $SID
-        # Attempt to translate the SID to a name
         $Account = $SecurityIdentifier.Translate([System.Security.Principal.NTAccount])
-        
-        # If translation succeeds and the name is not the raw SID (which sometimes happens
-        # if the account is truly unknown), it is likely a valid account.
         if ($Account.Value -notlike "*$SID*") {
-            return $true # Account resolved to a name
+            return $true
         }
-    }
-    catch {
-        # Catching the exception means the SID could not be translated,
-        # which confirms it is an orphan (Account Unknown).
+    } catch {
         return $false
     }
-    # If it gets here without translating, assume it's an orphan.
     return $false
 }
 # -----------------------------------------------------------------
 
-Write-Host "--- Scanning for Orphaned User Profiles (Account Unknown) ---"
-Write-Host "Interactive Mode: You will be prompted before each deletion."
-Write-Host "-------------------------------------------------------------"
-Write-Host ""
 
-# Variable to track if the user has chosen to delete all profiles
-$DeleteAll = $false
+# --- Modern WPF Window UI ---
+Add-Type -AssemblyName PresentationFramework
+$Profiles = Get-CimInstance -ClassName Win32_UserProfile | Where-Object { -not $_.Special -and -not $_.Loaded }
 
-# Get all user profile instances
-$Profiles = Get-CimInstance -ClassName Win32_UserProfile
-
-# Filter and process profiles
-$Profiles | ForEach-Object {
-    $Profile = $_
-    $IsLoaded = $Profile.Loaded
-    $LocalPath = $Profile.LocalPath
-    $ProfileSID = $Profile.SID
-    $IsSpecial = $Profile.Special
-
-    # Get the actual folder name from the path
-    $FolderName = Split-Path $LocalPath -Leaf
-
-    # Write out diagnostic information for clarity
-    Write-Host "Processing Profile Folder: $($FolderName)" -ForegroundColor DarkGray
-    Write-Host "  SID: $($ProfileSID)" -ForegroundColor DarkGray
-
-    # Skip system profiles (Default, Public, etc.)
-    if ($IsSpecial) {
-        Write-Host "  Skipping: Special/System profile." -ForegroundColor DarkGray
-        Write-Host "-------------------------------------------------------------"
-        return
+$ProfileList = @()
+foreach ($UserProfile in $Profiles) {
+    $SID = $UserProfile.SID
+    $Path = $UserProfile.LocalPath
+    $IsOrphan = -not (Test-SidResolution -SID $SID)
+    $ProfileList += [PSCustomObject]@{
+        SID = $SID
+        Path = $Path
+        Orphan = $IsOrphan
+        ProfileObj = $UserProfile
     }
-
-    # Skip currently loaded profiles
-    if ($IsLoaded) {
-        Write-Host "  Skipping: Profile currently loaded/in use." -ForegroundColor Yellow
-        Write-Host "-------------------------------------------------------------"
-        return
-    }
-
-    # CRITERIA FOR ORPHANED PROFILE (Most Reliable Check):
-    # Check if the SID resolves to a valid user account name.
-    $IsLinked = Test-SidResolution -SID $ProfileSID
-
-    if (-not $IsLinked) {
-        
-        Write-Host "[$($ProfileSID)] Found ORPHANED Profile (Account Unknown/Unresolved):" -ForegroundColor Red
-        Write-Host "  Path: $($LocalPath)" -ForegroundColor Red
-        Write-Host "  Reason: Profile SID does not resolve to an active account." -ForegroundColor Red
-
-        $ShouldDelete = $false
-        
-        if (-not $DeleteAll) {
-            # Ask for confirmation before deleting
-            $Confirm = Read-Host "Do you want to delete this profile? (Type Y to delete, N to skip, or A to delete All subsequent profiles)"
-            
-            # Check for Y, N, or A
-            if ($Confirm -ceq 'y') {
-                $ShouldDelete = $true
-            } elseif ($Confirm -ceq 'a') {
-                $DeleteAll = $true
-                $ShouldDelete = $true
-            }
-
-        } elseif ($DeleteAll) {
-            $ShouldDelete = $true
-            Write-Host "Status: Deleting without prompt (Delete All selected)..." -ForegroundColor Red
-        }
-
-
-        if ($ShouldDelete) {
-            Write-Host "Status: Deleting profile entry and associated folder..." -ForegroundColor Red
-            try {
-                # Use Remove-CimInstance to delete the profile entry and folder
-                Remove-CimInstance -InputObject $Profile
-                Write-Host "Deletion Successful for $($ProfileSID)." -ForegroundColor Green
-            }
-            catch {
-                Write-Error "Failed to delete profile entry for $($ProfileSID). Error: $($_.Exception.Message)"
-            }
-        } else {
-            Write-Host "Status: Skipping deletion (User declined)." -ForegroundColor Yellow
-        }
-    } else {
-        # Profile is successfully linked to an active user account.
-        Write-Host "  Skipping: Profile is linked to an active account." -ForegroundColor DarkGray
-    }
-    Write-Host "-------------------------------------------------------------"
 }
 
-Write-Host ""
-Write-Host "--- Scan Complete ---"
+
+$xaml = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                Title="User Profile Cleanup" Height="450" Width="800" WindowStartupLocation="CenterScreen">
+    <Grid Margin="10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <DataGrid x:Name="dgProfiles" AutoGenerateColumns="False" SelectionMode="Extended" CanUserAddRows="False" Grid.Row="0" Margin="0,0,0,10">
+            <DataGrid.Columns>
+                <DataGridCheckBoxColumn Header="Delete" Binding="{Binding Delete}" Width="60"/>
+                <DataGridTextColumn Header="Profile Path" Binding="{Binding Path}" Width="*"/>
+                <DataGridTextColumn Header="SID" Binding="{Binding SID}" Width="250"/>
+                <DataGridTextColumn Header="Orphaned" Binding="{Binding Orphan}" Width="80"/>
+            </DataGrid.Columns>
+        </DataGrid>
+        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button x:Name="btnDelete" Content="Delete Selected" Width="120" Margin="0,0,10,0"/>
+            <Button x:Name="btnExit" Content="Exit" Width="80"/>
+        </StackPanel>
+    </Grid>
+</Window>
+"@
+
+
+
+$stringReader = New-Object System.IO.StringReader $xaml
+$xmlReader = [System.Xml.XmlReader]::Create($stringReader)
+try {
+    $window = [Windows.Markup.XamlReader]::Load($xmlReader)
+} catch {
+    [System.Windows.MessageBox]::Show("Failed to load window.\n$($_.Exception.Message)", "Error", 'OK', 'Error') | Out-Null
+    exit 1
+}
+
+# Prepare data for DataGrid
+$data = $ProfileList | ForEach-Object {
+    [PSCustomObject]@{
+        Delete = $_.Orphan
+        Path = $_.Path
+        SID = $_.SID
+        Orphan = if ($_.Orphan) { 'Yes' } else { 'No' }
+        ProfileObj = $_.ProfileObj
+    }
+}
+
+$dg = $window.FindName('dgProfiles')
+if ($null -eq $dg) {
+    [System.Windows.MessageBox]::Show("Failed to find DataGrid in window.", "Error", 'OK', 'Error') | Out-Null
+    exit 1
+}
+$dg.ItemsSource = $data
+
+# Button handlers
+$btnDelete = $window.FindName('btnDelete')
+$btnExit = $window.FindName('btnExit')
+
+if ($null -eq $btnDelete -or $null -eq $btnExit) {
+    [System.Windows.MessageBox]::Show("Failed to find buttons in window.", "Error", 'OK', 'Error') | Out-Null
+    exit 1
+}
+
+$btnDelete.Add_Click({
+    $toDelete = @($dg.ItemsSource | Where-Object { $_.Delete })
+    if ($toDelete.Count -eq 0) {
+        [System.Windows.MessageBox]::Show("No profiles selected for deletion.", "Info", 'OK', 'Information') | Out-Null
+        return
+    }
+    $msg = "Are you sure you want to delete the selected profiles? This cannot be undone."
+    $result = [System.Windows.MessageBox]::Show($msg, "Confirm Deletion", 'YesNo', 'Warning')
+    if ($result -eq 'Yes') {
+        foreach ($item in $toDelete) {
+            try {
+                Remove-CimInstance -InputObject $item.ProfileObj
+                $data.Remove($item)
+            } catch {
+                [System.Windows.MessageBox]::Show("Failed to delete profile: $($item.Path)\n$($_.Exception.Message)", "Error", 'OK', 'Error') | Out-Null
+            }
+        }
+        $dg.Items.Refresh()
+        [System.Windows.MessageBox]::Show("Selected profiles deleted.", "Done", 'OK', 'Information') | Out-Null
+    }
+})
+
+$btnExit.Add_Click({ $window.Close() })
+
+[void]$window.ShowDialog()
 
 # SIG # Begin signature block
 # MIIe6QYJKoZIhvcNAQcCoIIe2jCCHtYCAQExDzANBglghkgBZQMEAgEFADB5Bgor

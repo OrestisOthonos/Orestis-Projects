@@ -1,5 +1,203 @@
 ﻿# Define the network path
-$networkPath = "\\filesrv3\safergambling"
+$networkPath = "\\filesrv3.kpax.local\safergambling"
+
+# Load Windows Forms assembly
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+# Create function to easily create styled labels
+function New-StyledLabel ($text, $top, $isHeader = $false) {
+    $label = New-Object System.Windows.Forms.Label
+    $label.Text = $text
+    $label.AutoSize = $true
+    if ($isHeader) {
+        $label.Font = New-Object System.Drawing.Font("Segoe UI", 12, [System.Drawing.FontStyle]::Bold)
+        $label.ForeColor = [System.Drawing.Color]::FromArgb(64, 64, 64)
+        $label.Location = New-Object System.Drawing.Point(20, $top)
+    }
+    else {
+        $label.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+        $label.ForeColor = [System.Drawing.Color]::FromArgb(80, 80, 80)
+        $label.Location = New-Object System.Drawing.Point(22, $top)
+    }
+    return $label
+}
+
+# Create function to create modern styled buttons
+function New-StyledButton ($text, $left, $top, $isPrimary = $true) {
+    $btn = New-Object System.Windows.Forms.Button
+    $btn.Text = $text
+    $btn.Location = New-Object System.Drawing.Point($left, $top)
+    $btn.Size = New-Object System.Drawing.Size(100, 35)
+    $btn.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Regular)
+    $btn.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $btn.FlatAppearance.BorderSize = 0
+    $btn.Cursor = [System.Windows.Forms.Cursors]::Hand
+    
+    if ($isPrimary) {
+        $btn.BackColor = [System.Drawing.Color]::FromArgb(0, 120, 215) # Modern Windows Blue
+        $btn.ForeColor = [System.Drawing.Color]::White
+        $btn.FlatAppearance.MouseOverBackColor = [System.Drawing.Color]::FromArgb(0, 100, 190)
+        $btn.FlatAppearance.MouseDownBackColor = [System.Drawing.Color]::FromArgb(0, 80, 160)
+    }
+    else {
+        $btn.BackColor = [System.Drawing.Color]::White
+        $btn.ForeColor = [System.Drawing.Color]::FromArgb(64, 64, 64)
+        $btn.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(200, 200, 200)
+        $btn.FlatAppearance.BorderSize = 1
+        $btn.FlatAppearance.MouseOverBackColor = [System.Drawing.Color]::FromArgb(240, 240, 240)
+    }
+    
+    return $btn
+}
+
+function Get-ModernCredential {
+    # Create the form
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = "Authentication Required"
+    $form.Size = New-Object System.Drawing.Size(400, 320)
+    $form.StartPosition = "CenterScreen"
+    $form.FormBorderStyle = "FixedDialog"
+    $form.MaximizeBox = $false
+    $form.MinimizeBox = $false
+    $form.BackColor = [System.Drawing.Color]::White
+    $form.TopMost = $true
+
+    # Header
+    $header = New-StyledLabel "Network Authentication" 20 $true
+    $form.Controls.Add($header)
+
+    $subHeader = New-StyledLabel "Please enter your credentials for the network drive." 50
+    $subHeader.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+    $form.Controls.Add($subHeader)
+
+    # Label: Username
+    $labelUser = New-StyledLabel "Username" 90
+    $form.Controls.Add($labelUser)
+
+    # TextBox: Username
+    $textBoxUser = New-Object System.Windows.Forms.TextBox
+    $textBoxUser.Location = New-Object System.Drawing.Point(25, 115)
+    $textBoxUser.Size = New-Object System.Drawing.Size(330, 26)
+    $textBoxUser.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+    # Default to current user if desired, or leave empty
+    $textBoxUser.Text = $env:USERNAME
+    $form.Controls.Add($textBoxUser)
+
+    # Label: Password
+    $labelPassword = New-StyledLabel "Password" 155
+    $form.Controls.Add($labelPassword)
+
+    # TextBox: Password
+    $textBoxPassword = New-Object System.Windows.Forms.TextBox
+    $textBoxPassword.Location = New-Object System.Drawing.Point(25, 180)
+    $textBoxPassword.Size = New-Object System.Drawing.Size(330, 26)
+    $textBoxPassword.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+    $textBoxPassword.PasswordChar = "●"
+    $form.Controls.Add($textBoxPassword)
+
+    # Separator line
+    $line = New-Object System.Windows.Forms.Label
+    $line.Location = New-Object System.Drawing.Point(0, 230)
+    $line.Size = New-Object System.Drawing.Size(400, 1)
+    $line.BackColor = [System.Drawing.Color]::FromArgb(220, 220, 220)
+    $form.Controls.Add($line)
+
+    # Button Panel Background
+    $buttonPanel = New-Object System.Windows.Forms.Panel
+    $buttonPanel.Location = New-Object System.Drawing.Point(0, 231)
+    $buttonPanel.Size = New-Object System.Drawing.Size(400, 50)
+    $buttonPanel.BackColor = [System.Drawing.Color]::FromArgb(245, 245, 245)
+    $form.Controls.Add($buttonPanel)
+
+    # Button: OK (Connect)
+    $okButton = New-StyledButton "Connect" 170 8 $true
+    $okButton.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $form.AcceptButton = $okButton
+    $buttonPanel.Controls.Add($okButton)
+
+    # Button: Cancel
+    $cancelButton = New-StyledButton "Cancel" 280 8 $false
+    $cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $form.CancelButton = $cancelButton
+    $buttonPanel.Controls.Add($cancelButton)
+
+    # Show the dialog
+    $result = $form.ShowDialog()
+
+    if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
+        $user = $textBoxUser.Text
+        if ($user -notlike "*@*") {
+            $user = "$user@kpax.local"
+        }
+        $pass = $textBoxPassword.Text
+        $securePass = ConvertTo-SecureString $pass -AsPlainText -Force
+        return New-Object System.Management.Automation.PSCredential ($user, $securePass)
+    }
+    
+    return $null
+}
+
+function Show-SuccessPopup ($driveLetter) {
+    $successForm = New-Object System.Windows.Forms.Form
+    $successForm.Text = "Success"
+    $successForm.Size = New-Object System.Drawing.Size(400, 180)
+    $successForm.StartPosition = "CenterScreen"
+    $successForm.FormBorderStyle = "FixedDialog"
+    $successForm.MaximizeBox = $false
+    $successForm.MinimizeBox = $false
+    $successForm.TopMost = $true
+    $successForm.BackColor = [System.Drawing.Color]::White
+
+    $lblSuccess = New-StyledLabel "Drive mapped successfully!" 20 $true
+    $lblSuccess.ForeColor = [System.Drawing.Color]::SeaGreen
+    $successForm.Controls.Add($lblSuccess)
+    
+    $lblInfo = New-StyledLabel "Mapped to drive letter: $driveLetter" 60
+    $successForm.Controls.Add($lblInfo)
+    
+    $btnOpen = New-StyledButton "Open Drive" 70 100 $true
+    $btnOpen.Width = 120
+    $btnOpen.DialogResult = [System.Windows.Forms.DialogResult]::Yes
+    $successForm.Controls.Add($btnOpen)
+    
+    $btnClose = New-StyledButton "Close" 210 100 $false
+    $btnClose.Width = 120
+    $btnClose.DialogResult = [System.Windows.Forms.DialogResult]::No
+    $successForm.Controls.Add($btnClose)
+
+    $result = $successForm.ShowDialog()
+    if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
+        explorer.exe "$driveLetter"
+    }
+}
+
+function Show-ErrorPopup ($message) {
+    $errForm = New-Object System.Windows.Forms.Form
+    $errForm.Text = "Error"
+    $errForm.Size = New-Object System.Drawing.Size(400, 180)
+    $errForm.StartPosition = "CenterScreen"
+    $errForm.FormBorderStyle = "FixedDialog"
+    $errForm.MaximizeBox = $false
+    $errForm.MinimizeBox = $false
+    $errForm.TopMost = $true
+    $errForm.BackColor = [System.Drawing.Color]::White
+
+    $lblErr = New-StyledLabel "Connection Failed" 20 $true
+    $lblErr.ForeColor = [System.Drawing.Color]::Firebrick
+    $errForm.Controls.Add($lblErr)
+    
+    $lblErrMsg = New-StyledLabel $message 60
+    $lblErrMsg.Size = New-Object System.Drawing.Size(350, 40)
+    $errForm.Controls.Add($lblErrMsg)
+    
+    $btnClose = New-StyledButton "Close" 145 90 $true
+    $btnClose.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $errForm.Controls.Add($btnClose)
+    $errForm.AcceptButton = $btnClose
+    
+    $errForm.ShowDialog() | Out-Null
+}
 
 # Get all used drive letters
 $usedDrives = (Get-PSDrive -PSProvider FileSystem).Name
@@ -10,181 +208,90 @@ $alphabet = 65..90 | ForEach-Object { [char]$_ }
 # Find the first available drive letter
 $availableDrive = $alphabet | Where-Object { $_ -notin $usedDrives } | Select-Object -First 1
 
-if ($availableDrive) {
-    # Prompt for credentials
-    $credential = Get-Credential
-
-    # Map the network drive
-    New-PSDrive -Name $availableDrive -PSProvider FileSystem -Root $networkPath -Credential $credential -Persist
-    Write-Host "Mapped $networkPath to drive $availableDrive"
-} else {
-    Write-Host "No available drive letters."
+# Check if the drive is already mapped
+$cleanNetworkPath = $networkPath -replace '\\+', '\'
+$existingDrive = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DriveType = 4" | Where-Object { 
+    $pName = $_.ProviderName -replace '\\+', '\'
+    $pName -ieq $cleanNetworkPath
 }
-echo Successfully mapped $networkPath
-# SIG # Begin signature block
-# MIIe6AYJKoZIhvcNAQcCoIIe2TCCHtUCAQExDzANBglghkgBZQMEAgEFADB5Bgor
-# BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDi6p0lxxloMWAY
-# fy3LwLaJW84Zd07be4i/yf6KZ5znF6CCA2AwggNcMIICRKADAgECAhBg0d5ZM/rs
-# vETINKKp+/heMA0GCSqGSIb3DQEBCwUAMEYxFTATBgNVBAMMDFNraWxsIE9uIE5l
-# dDEtMCsGCSqGSIb3DQEJARYeb3Jlc3Rpcy5vdGhvbm9zQHNraWxsb25uZXQuY29t
-# MB4XDTI1MTIyMzE0MjY1MloXDTI2MTIyMzE0NDY1MlowRjEVMBMGA1UEAwwMU2tp
-# bGwgT24gTmV0MS0wKwYJKoZIhvcNAQkBFh5vcmVzdGlzLm90aG9ub3NAc2tpbGxv
-# bm5ldC5jb20wggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDFpU2S7eIK
-# q8Ypi4oR8JVe2aGZU3dgiwysOS369grASsMNJk0MtwBG7eySjxDgzsZhZxkP9xIg
-# FPimAa+DhYKyJhnDD80LTTzEdWEbDhUD2IvUubgDRePFM8WrQtiqjtvnC9F/IDYn
-# +Dbh2pAIw3OeRaZ4uIRzmwzQZQCciLdSuVJqvisKeN55HaKYFm6SU1p4G0UYsjbR
-# LAMtJ3oNpP1So7fil+yBOJyzthSHH4uoDRGooE5vMsVHJRpLG5ICT/JV7V3c+JIC
-# y/9LSiO6avionHD7LyAY3pAX0QkMph0IY1ow7HCVrhpK2PBv3Ka3cmqReUrIJKHg
-# blr22VILcmRpAgMBAAGjRjBEMA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggr
-# BgEFBQcDAzAdBgNVHQ4EFgQUprKONaV5Vj0ttNzBzRfyp6hhaTcwDQYJKoZIhvcN
-# AQELBQADggEBADLvKLxSHV4mPOVP5JpqXTNVPdNhh4VEuXbE+Km3SkYpWOxvu9OB
-# OM6eKYYJDcUntKXxJNLEKNtDa0X3lPhNBhgJUfjnr351YzP4M8PscqLFrEWry6ty
-# 3pkD1wPWcN13g3MruNEU4ZhxfF2ifKrVRJgSB+aWUvSsz8u3Ob4dgaJaVbByRzYS
-# KvDhJYuiDZXZDruUUdfsbqTIB0wtjV6NyFED6mf1QwvUUuaXJUHJY+P7nvjSr5i1
-# LKBYVofWe2cOX+70oWe+eB2ezpUUFBjtFznzRYtGDaPRYitxkEApY6EJ8JqkVJa+
-# qat7ndHgKysInhT+KntTEl3NOZGSt0M37jAxghreMIIa2gIBATBaMEYxFTATBgNV
-# BAMMDFNraWxsIE9uIE5ldDEtMCsGCSqGSIb3DQEJARYeb3Jlc3Rpcy5vdGhvbm9z
-# QHNraWxsb25uZXQuY29tAhBg0d5ZM/rsvETINKKp+/heMA0GCWCGSAFlAwQCAQUA
-# oHwwEAYKKwYBBAGCNwIBDDECMAAwGQYJKoZIhvcNAQkDMQwGCisGAQQBgjcCAQQw
-# HAYKKwYBBAGCNwIBCzEOMAwGCisGAQQBgjcCARUwLwYJKoZIhvcNAQkEMSIEIMwN
-# ZXFtJfOPvbKaPDo1omcJ4yoMsbK1fOKyK4VwQrh7MA0GCSqGSIb3DQEBAQUABIIB
-# AHxIiKwbFgB5I/11SkKeypoF5I9G9/w7IV1h6ki1LiriHAar+iYk3iDDjPZigfK3
-# Je/N1rIfiBtkUfE7evENg+PsRNfyKToNjzZYp9W1gf51yxulVIiK2Ukk8cDajivR
-# fFNDn+g1sW9kga5qJEWuyqBUvvUWYJLluqTi6jFWbCOzsbVprHW2Ad9TPr/sQTHq
-# PeWXBxcyFix/PW0iorElsSTKVqOktRa7BKiQyqw9wlvLgFAHrbJ+x4D+SZFASYnw
-# YSU4fLRpCa6xuN7WVmxyzB9jM3NyapAqzak10jEgZWZuFFYReXDxTjwlo9dJ+nAv
-# YP8C/s/ZVW+OlquRYz8KaYihghjXMIIY0wYKKwYBBAGCNwMDATGCGMMwghi/Bgkq
-# hkiG9w0BBwKgghiwMIIYrAIBAzEPMA0GCWCGSAFlAwQCAgUAMIH3BgsqhkiG9w0B
-# CRABBKCB5wSB5DCB4QIBAQYKKwYBBAGyMQIBATAxMA0GCWCGSAFlAwQCAQUABCCS
-# KaI0snYYIwXqUHHXKyxCIQ9ZwBkIzrVxktSdBeiImwIUYennH+B+ymqdz+DmGmQ5
-# zIBCIvgYDzIwMjUxMjIzMTYyNzE2WqB2pHQwcjELMAkGA1UEBhMCR0IxFzAVBgNV
-# BAgTDldlc3QgWW9ya3NoaXJlMRgwFgYDVQQKEw9TZWN0aWdvIExpbWl0ZWQxMDAu
-# BgNVBAMTJ1NlY3RpZ28gUHVibGljIFRpbWUgU3RhbXBpbmcgU2lnbmVyIFIzNqCC
-# EwQwggZiMIIEyqADAgECAhEApCk7bh7d16c0CIetek63JDANBgkqhkiG9w0BAQwF
-# ADBVMQswCQYDVQQGEwJHQjEYMBYGA1UEChMPU2VjdGlnbyBMaW1pdGVkMSwwKgYD
-# VQQDEyNTZWN0aWdvIFB1YmxpYyBUaW1lIFN0YW1waW5nIENBIFIzNjAeFw0yNTAz
-# MjcwMDAwMDBaFw0zNjAzMjEyMzU5NTlaMHIxCzAJBgNVBAYTAkdCMRcwFQYDVQQI
-# Ew5XZXN0IFlvcmtzaGlyZTEYMBYGA1UEChMPU2VjdGlnbyBMaW1pdGVkMTAwLgYD
-# VQQDEydTZWN0aWdvIFB1YmxpYyBUaW1lIFN0YW1waW5nIFNpZ25lciBSMzYwggIi
-# MA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQDThJX0bqRTePI9EEt4Egc83JSB
-# U2dhrJ+wY7JgReuff5KQNhMuzVytzD+iXazATVPMHZpH/kkiMo1/vlAGFrYN2P7g
-# 0Q8oPEcR3h0SftFNYxxMh+bj3ZNbbYjwt8f4DsSHPT+xp9zoFuw0HOMdO3sWeA1+
-# F8mhg6uS6BJpPwXQjNSHpVTCgd1gOmKWf12HSfSbnjl3kDm0kP3aIUAhsodBYZsJ
-# A1imWqkAVqwcGfvs6pbfs/0GE4BJ2aOnciKNiIV1wDRZAh7rS/O+uTQcb6JVzBVm
-# PP63k5xcZNzGo4DOTV+sM1nVrDycWEYS8bSS0lCSeclkTcPjQah9Xs7xbOBoCdma
-# hSfg8Km8ffq8PhdoAXYKOI+wlaJj+PbEuwm6rHcm24jhqQfQyYbOUFTKWFe901Vd
-# yMC4gRwRAq04FH2VTjBdCkhKts5Py7H73obMGrxN1uGgVyZho4FkqXA8/uk6nkzP
-# H9QyHIED3c9CGIJ098hU4Ig2xRjhTbengoncXUeo/cfpKXDeUcAKcuKUYRNdGDlf
-# 8WnwbyqUblj4zj1kQZSnZud5EtmjIdPLKce8UhKl5+EEJXQp1Fkc9y5Ivk4AZacG
-# MCVG0e+wwGsjcAADRO7Wga89r/jJ56IDK773LdIsL3yANVvJKdeeS6OOEiH6hpq2
-# yT+jJ/lHa9zEdqFqMwIDAQABo4IBjjCCAYowHwYDVR0jBBgwFoAUX1jtTDF6omFC
-# jVKAurNhlxmiMpswHQYDVR0OBBYEFIhhjKEqN2SBKGChmzHQjP0sAs5PMA4GA1Ud
-# DwEB/wQEAwIGwDAMBgNVHRMBAf8EAjAAMBYGA1UdJQEB/wQMMAoGCCsGAQUFBwMI
-# MEoGA1UdIARDMEEwNQYMKwYBBAGyMQECAQMIMCUwIwYIKwYBBQUHAgEWF2h0dHBz
-# Oi8vc2VjdGlnby5jb20vQ1BTMAgGBmeBDAEEAjBKBgNVHR8EQzBBMD+gPaA7hjlo
-# dHRwOi8vY3JsLnNlY3RpZ28uY29tL1NlY3RpZ29QdWJsaWNUaW1lU3RhbXBpbmdD
-# QVIzNi5jcmwwegYIKwYBBQUHAQEEbjBsMEUGCCsGAQUFBzAChjlodHRwOi8vY3J0
-# LnNlY3RpZ28uY29tL1NlY3RpZ29QdWJsaWNUaW1lU3RhbXBpbmdDQVIzNi5jcnQw
-# IwYIKwYBBQUHMAGGF2h0dHA6Ly9vY3NwLnNlY3RpZ28uY29tMA0GCSqGSIb3DQEB
-# DAUAA4IBgQACgT6khnJRIfllqS49Uorh5ZvMSxNEk4SNsi7qvu+bNdcuknHgXIaZ
-# yqcVmhrV3PHcmtQKt0blv/8t8DE4bL0+H0m2tgKElpUeu6wOH02BjCIYM6HLInbN
-# HLf6R2qHC1SUsJ02MWNqRNIT6GQL0Xm3LW7E6hDZmR8jlYzhZcDdkdw0cHhXjbOL
-# smTeS0SeRJ1WJXEzqt25dbSOaaK7vVmkEVkOHsp16ez49Bc+Ayq/Oh2BAkSTFog4
-# 3ldEKgHEDBbCIyba2E8O5lPNan+BQXOLuLMKYS3ikTcp/Qw63dxyDCfgqXYUhxBp
-# XnmeSO/WA4NwdwP35lWNhmjIpNVZvhWoxDL+PxDdpph3+M5DroWGTc1ZuDa1iXmO
-# FAK4iwTnlWDg3QNRsRa9cnG3FBBpVHnHOEQj4GMkrOHdNDTbonEeGvZ+4nSZXrwC
-# W4Wv2qyGDBLlKk3kUW1pIScDCpm/chL6aUbnSsrtbepdtbCLiGanKVR/KC1gsR0t
-# C6Q0RfWOI4owggYUMIID/KADAgECAhB6I67aU2mWD5HIPlz0x+M/MA0GCSqGSIb3
-# DQEBDAUAMFcxCzAJBgNVBAYTAkdCMRgwFgYDVQQKEw9TZWN0aWdvIExpbWl0ZWQx
-# LjAsBgNVBAMTJVNlY3RpZ28gUHVibGljIFRpbWUgU3RhbXBpbmcgUm9vdCBSNDYw
-# HhcNMjEwMzIyMDAwMDAwWhcNMzYwMzIxMjM1OTU5WjBVMQswCQYDVQQGEwJHQjEY
-# MBYGA1UEChMPU2VjdGlnbyBMaW1pdGVkMSwwKgYDVQQDEyNTZWN0aWdvIFB1Ymxp
-# YyBUaW1lIFN0YW1waW5nIENBIFIzNjCCAaIwDQYJKoZIhvcNAQEBBQADggGPADCC
-# AYoCggGBAM2Y2ENBq26CK+z2M34mNOSJjNPvIhKAVD7vJq+MDoGD46IiM+b83+3e
-# cLvBhStSVjeYXIjfa3ajoW3cS3ElcJzkyZlBnwDEJuHlzpbN4kMH2qRBVrjrGJgS
-# lzzUqcGQBaCxpectRGhhnOSwcjPMI3G0hedv2eNmGiUbD12OeORN0ADzdpsQ4dDi
-# 6M4YhoGE9cbY11XxM2AVZn0GiOUC9+XE0wI7CQKfOUfigLDn7i/WeyxZ43XLj5GV
-# o7LDBExSLnh+va8WxTlA+uBvq1KO8RSHUQLgzb1gbL9Ihgzxmkdp2ZWNuLc+XyEm
-# JNbD2OIIq/fWlwBp6KNL19zpHsODLIsgZ+WZ1AzCs1HEK6VWrxmnKyJJg2Lv23Dl
-# EdZlQSGdF+z+Gyn9/CRezKe7WNyxRf4e4bwUtrYE2F5Q+05yDD68clwnweckKtxR
-# aF0VzN/w76kOLIaFVhf5sMM/caEZLtOYqYadtn034ykSFaZuIBU9uCSrKRKTPJhW
-# vXk4CllgrwIDAQABo4IBXDCCAVgwHwYDVR0jBBgwFoAU9ndq3T/9ARP/FqFsggIv
-# 0Ao9FCUwHQYDVR0OBBYEFF9Y7UwxeqJhQo1SgLqzYZcZojKbMA4GA1UdDwEB/wQE
-# AwIBhjASBgNVHRMBAf8ECDAGAQH/AgEAMBMGA1UdJQQMMAoGCCsGAQUFBwMIMBEG
-# A1UdIAQKMAgwBgYEVR0gADBMBgNVHR8ERTBDMEGgP6A9hjtodHRwOi8vY3JsLnNl
-# Y3RpZ28uY29tL1NlY3RpZ29QdWJsaWNUaW1lU3RhbXBpbmdSb290UjQ2LmNybDB8
-# BggrBgEFBQcBAQRwMG4wRwYIKwYBBQUHMAKGO2h0dHA6Ly9jcnQuc2VjdGlnby5j
-# b20vU2VjdGlnb1B1YmxpY1RpbWVTdGFtcGluZ1Jvb3RSNDYucDdjMCMGCCsGAQUF
-# BzABhhdodHRwOi8vb2NzcC5zZWN0aWdvLmNvbTANBgkqhkiG9w0BAQwFAAOCAgEA
-# Etd7IK0ONVgMnoEdJVj9TC1ndK/HYiYh9lVUacahRoZ2W2hfiEOyQExnHk1jkvpI
-# JzAMxmEc6ZvIyHI5UkPCbXKspioYMdbOnBWQUn733qMooBfIghpR/klUqNxx6/fD
-# XqY0hSU1OSkkSivt51UlmJElUICZYBodzD3M/SFjeCP59anwxs6hwj1mfvzG+b1c
-# oYGnqsSz2wSKr+nDO+Db8qNcTbJZRAiSazr7KyUJGo1c+MScGfG5QHV+bps8BX5O
-# yv9Ct36Y4Il6ajTqV2ifikkVtB3RNBUgwu/mSiSUice/Jp/q8BMk/gN8+0rNIE+Q
-# qU63JoVMCMPY2752LmESsRVVoypJVt8/N3qQ1c6FibbcRabo3azZkcIdWGVSAdoL
-# gAIxEKBeNh9AQO1gQrnh1TA8ldXuJzPSuALOz1Ujb0PCyNVkWk7hkhVHfcvBfI8N
-# tgWQupiaAeNHe0pWSGH2opXZYKYG4Lbukg7HpNi/KqJhue2Keak6qH9A8CeEOB7E
-# ob0Zf+fU+CCQaL0cJqlmnx9HCDxF+3BLbUufrV64EbTI40zqegPZdA+sXCmbcZy6
-# okx/SjwsusWRItFA3DE8MORZeFb6BmzBtqKJ7l939bbKBy2jvxcJI98Va95Q5Jnl
-# Kor3m0E7xpMeYRriWklUPsetMSf2NvUQa/E5vVyefQIwggaCMIIEaqADAgECAhA2
-# wrC9fBs656Oz3TbLyXVoMA0GCSqGSIb3DQEBDAUAMIGIMQswCQYDVQQGEwJVUzET
-# MBEGA1UECBMKTmV3IEplcnNleTEUMBIGA1UEBxMLSmVyc2V5IENpdHkxHjAcBgNV
-# BAoTFVRoZSBVU0VSVFJVU1QgTmV0d29yazEuMCwGA1UEAxMlVVNFUlRydXN0IFJT
-# QSBDZXJ0aWZpY2F0aW9uIEF1dGhvcml0eTAeFw0yMTAzMjIwMDAwMDBaFw0zODAx
-# MTgyMzU5NTlaMFcxCzAJBgNVBAYTAkdCMRgwFgYDVQQKEw9TZWN0aWdvIExpbWl0
-# ZWQxLjAsBgNVBAMTJVNlY3RpZ28gUHVibGljIFRpbWUgU3RhbXBpbmcgUm9vdCBS
-# NDYwggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQCIndi5RWedHd3ouSaB
-# mlRUwHxJBZvMWhUP2ZQQRLRBQIF3FJmp1OR2LMgIU14g0JIlL6VXWKmdbmKGRDIL
-# RxEtZdQnOh2qmcxGzjqemIk8et8sE6J+N+Gl1cnZocew8eCAawKLu4TRrCoqCAT8
-# uRjDeypoGJrruH/drCio28aqIVEn45NZiZQI7YYBex48eL78lQ0BrHeSmqy1uXe9
-# xN04aG0pKG9ki+PC6VEfzutu6Q3IcZZfm00r9YAEp/4aeiLhyaKxLuhKKaAdQjRa
-# f/h6U13jQEV1JnUTCm511n5avv4N+jSVwd+Wb8UMOs4netapq5Q/yGyiQOgjsP/J
-# RUj0MAT9YrcmXcLgsrAimfWY3MzKm1HCxcquinTqbs1Q0d2VMMQyi9cAgMYC9jKc
-# +3mW62/yVl4jnDcw6ULJsBkOkrcPLUwqj7poS0T2+2JMzPP+jZ1h90/QpZnBkhdt
-# ixMiWDVgh60KmLmzXiqJc6lGwqoUqpq/1HVHm+Pc2B6+wCy/GwCcjw5rmzajLbmq
-# GygEgaj/OLoanEWP6Y52Hflef3XLvYnhEY4kSirMQhtberRvaI+5YsD3XVxHGBjl
-# Ili5u+NrLedIxsE88WzKXqZjj9Zi5ybJL2WjeXuOTbswB7XjkZbErg7ebeAQUQiS
-# /uRGZ58NHs57ZPUfECcgJC+v2wIDAQABo4IBFjCCARIwHwYDVR0jBBgwFoAUU3m/
-# WqorSs9UgOHYm8Cd8rIDZsswHQYDVR0OBBYEFPZ3at0//QET/xahbIICL9AKPRQl
-# MA4GA1UdDwEB/wQEAwIBhjAPBgNVHRMBAf8EBTADAQH/MBMGA1UdJQQMMAoGCCsG
-# AQUFBwMIMBEGA1UdIAQKMAgwBgYEVR0gADBQBgNVHR8ESTBHMEWgQ6BBhj9odHRw
-# Oi8vY3JsLnVzZXJ0cnVzdC5jb20vVVNFUlRydXN0UlNBQ2VydGlmaWNhdGlvbkF1
-# dGhvcml0eS5jcmwwNQYIKwYBBQUHAQEEKTAnMCUGCCsGAQUFBzABhhlodHRwOi8v
-# b2NzcC51c2VydHJ1c3QuY29tMA0GCSqGSIb3DQEBDAUAA4ICAQAOvmVB7WhEuOWh
-# xdQRh+S3OyWM637ayBeR7djxQ8SihTnLf2sABFoB0DFR6JfWS0snf6WDG2gtCGfl
-# wVvcYXZJJlFfym1Doi+4PfDP8s0cqlDmdfyGOwMtGGzJ4iImyaz3IBae91g50Qyr
-# VbrUoT0mUGQHbRcF57olpfHhQEStz5i6hJvVLFV/ueQ21SM99zG4W2tB1ExGL98i
-# dX8ChsTwbD/zIExAopoe3l6JrzJtPxj8V9rocAnLP2C8Q5wXVVZcbw4x4ztXLsGz
-# qZIiRh5i111TW7HV1AtsQa6vXy633vCAbAOIaKcLAo/IU7sClyZUk62XD0VUnHD+
-# YvVNvIGezjM6CRpcWed/ODiptK+evDKPU2K6synimYBaNH49v9Ih24+eYXNtI38b
-# yt5kIvh+8aW88WThRpv8lUJKaPn37+YHYafob9Rg7LyTrSYpyZoBmwRWSE4W6iPj
-# B7wJjJpH29308ZkpKKdpkiS9WNsf/eeUtvRrtIEiSJHN899L1P4l6zKVsdrUu1FX
-# 1T/ubSrsxrYJD+3f3aKg6yxdbugot06YwGXXiy5UUGZvOu3lXlxA+fC13dQ5OlL2
-# gIb5lmF6Ii8+CQOYDwXM+yd9dbmocQsHjcRPsccUd5E9FiswEqORvz8g3s+jR3SF
-# CgXhN4wz7NgAnOgpCdUo4uDyllU9PzGCBJIwggSOAgEBMGowVTELMAkGA1UEBhMC
-# R0IxGDAWBgNVBAoTD1NlY3RpZ28gTGltaXRlZDEsMCoGA1UEAxMjU2VjdGlnbyBQ
-# dWJsaWMgVGltZSBTdGFtcGluZyBDQSBSMzYCEQCkKTtuHt3XpzQIh616TrckMA0G
-# CWCGSAFlAwQCAgUAoIIB+TAaBgkqhkiG9w0BCQMxDQYLKoZIhvcNAQkQAQQwHAYJ
-# KoZIhvcNAQkFMQ8XDTI1MTIyMzE2MjcxNlowPwYJKoZIhvcNAQkEMTIEMGa7zs79
-# On116FlsxNXI18PPGf8TnSbT2R3lSHQlapUHYdbdolOC+6/05BRxFsnXLTCCAXoG
-# CyqGSIb3DQEJEAIMMYIBaTCCAWUwggFhMBYEFDjJFIEQRLTcZj6T1HRLgUGGqbWx
-# MIGHBBTGrlTkeIbxfD1VEkiMacNKevnC3TBvMFukWTBXMQswCQYDVQQGEwJHQjEY
-# MBYGA1UEChMPU2VjdGlnbyBMaW1pdGVkMS4wLAYDVQQDEyVTZWN0aWdvIFB1Ymxp
-# YyBUaW1lIFN0YW1waW5nIFJvb3QgUjQ2AhB6I67aU2mWD5HIPlz0x+M/MIG8BBSF
-# PWMtk4KCYXzQkDXEkd6SwULaxzCBozCBjqSBizCBiDELMAkGA1UEBhMCVVMxEzAR
-# BgNVBAgTCk5ldyBKZXJzZXkxFDASBgNVBAcTC0plcnNleSBDaXR5MR4wHAYDVQQK
-# ExVUaGUgVVNFUlRSVVNUIE5ldHdvcmsxLjAsBgNVBAMTJVVTRVJUcnVzdCBSU0Eg
-# Q2VydGlmaWNhdGlvbiBBdXRob3JpdHkCEDbCsL18Gzrno7PdNsvJdWgwDQYJKoZI
-# hvcNAQEBBQAEggIAfM7+JwuqcD4Dnd0knTd0HuyqrR6mBa4zOKnhiE2XMgrznh4W
-# cJUJ0r1zjLUz3rqcapEBNc5V7l4NTuXPpHgJXyAvwjlk8HKLX3gv2MXfYXpwEZmx
-# QGNqSyMuCTxAaRlXPYX1bHR/pRTP3ZTxkQSU4uDxIf/ZQvpBsKKoGqb7o4gYxxvX
-# 3kDf6XpTuX2fOQqTbh+I1w/4c8u6LH+QVz9zV+P2pZ0fyMkI3sFqZkuuebQzLnxy
-# rTtkNOmX0R/pPMAUZpsu6qVeWICFWT3je8yIlvHT6FqhH6qKCasNFcAOUp97sFID
-# QkuNPvBntTaWT40DRizZhsFFZhv1YmT+b6gMuk4jzzgO6+PAdh5h3mvX7XKvNTAo
-# iaLMIYhX6e37PE0olcLXD71HU5MEBw1yj/Ya49nr7qFCtYq5hjJRGbYVV39Bf6al
-# lGE+iiQ1aKe6wY6RNt6RjmcWChZVce7Zqj60VxpAufvnC1iVRdsDDjzLzCO6gM7X
-# HSDjiDKHDDQ57nwZkvSDNm2e7xvm+UNwsem8l+njkq2kYqiH0GVqG67oWh61bv/u
-# AvHWL+p06jEOaua6pQ1zAFc7383wJ/hDVg7DLJDrEdxX76EM23zIlxk8FU6PaYyc
-# lLn31Sey4Jmsy8Criqla9RypSxh+yte7XYHd31wwFFEzNjsca8ldFstXKfM=
-# SIG # End signature block
+
+if ($existingDrive) {
+    Write-Host "The network path $networkPath is already mapped to drive $($existingDrive.DeviceID)" -ForegroundColor White
+    
+    # Show notice popup
+    $noticeForm = New-Object System.Windows.Forms.Form
+    $noticeForm.Text = "Already Connected"
+    $noticeForm.Size = New-Object System.Drawing.Size(400, 180)
+    $noticeForm.StartPosition = "CenterScreen"
+    $noticeForm.FormBorderStyle = "FixedDialog"
+    $noticeForm.MaximizeBox = $false
+    $noticeForm.MinimizeBox = $false
+    $noticeForm.TopMost = $true
+    $noticeForm.BackColor = [System.Drawing.Color]::White
+
+    $lblNotice = New-StyledLabel "Drive Already Mapped" 20 $true
+    $lblNotice.ForeColor = [System.Drawing.Color]::FromArgb(0, 120, 215)
+    $noticeForm.Controls.Add($lblNotice)
+    
+    $lblMsgText = "The folder is already mapped to drive letter: $($existingDrive.DeviceID)"
+    $lblMsg = New-StyledLabel $lblMsgText 60
+    $lblMsg.Size = New-Object System.Drawing.Size(350, 40)
+    $noticeForm.Controls.Add($lblMsg)
+    
+    $btnOpen = New-StyledButton "Open Drive" 70 100 $true
+    $btnOpen.Width = 120
+    $btnOpen.DialogResult = [System.Windows.Forms.DialogResult]::Yes
+    $noticeForm.Controls.Add($btnOpen)
+    
+    $btnExit = New-StyledButton "Close" 210 100 $false
+    $btnExit.Width = 120
+    $btnExit.DialogResult = [System.Windows.Forms.DialogResult]::No
+    $noticeForm.Controls.Add($btnExit)
+    
+    $result = $noticeForm.ShowDialog()
+    if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
+        explorer.exe "$($existingDrive.DeviceID)"
+    }
+    exit
+}
+
+if ($availableDrive) {
+    $driveMapped = $false
+    
+    # 1. Try to map with current credentials (Silent attempt)
+    try {
+        Write-Host "Attempting to map using current credentials..." -ForegroundColor Cyan
+        New-PSDrive -Name $availableDrive -PSProvider FileSystem -Root $networkPath -Persist -ErrorAction Stop | Out-Null
+        Write-Host "Successfully mapped $networkPath to drive $availableDrive (Cached/Current Credentials)" -ForegroundColor Green
+        Show-SuccessPopup $availableDrive
+        $driveMapped = $true
+    }
+    catch {
+        Write-Host "Silent mapping failed. Prompting for credentials..." -ForegroundColor Yellow
+    }
+
+    # 2. If silent map failed, prompt user
+    if (-not $driveMapped) {
+        $credential = Get-ModernCredential
+
+        if ($credential) {
+            # Map the network drive with provided credentials
+            try {
+                New-PSDrive -Name $availableDrive -PSProvider FileSystem -Root $networkPath -Credential $credential -Persist -ErrorAction Stop | Out-Null
+                Write-Host "Mapped $networkPath to drive $availableDrive" -ForegroundColor Green
+                Show-SuccessPopup $availableDrive
+            }
+            catch {
+                Write-Error "Failed to map drive: $_"
+                Show-ErrorPopup "Check your credentials and try again."
+            }
+        }
+        else {
+            Write-Warning "Setup cancelled by user."
+        }
+    }
+}
+else {
+    Write-Host "No available drive letters."
+    Show-ErrorPopup "No available drive letters found."
+}

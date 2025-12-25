@@ -64,7 +64,8 @@ if (Get-Process -Name "Zoiper5" -ErrorAction SilentlyContinue) {
     $closeForm.StartPosition = "CenterScreen"
     $closeForm.FormBorderStyle = "FixedDialog"
     $closeForm.MaximizeBox = $false
-    $closeForm.MinimizeBox = $false
+    $closeForm.MinimizeBox = $true
+    $closeForm.ShowInTaskbar = $true
     $closeForm.TopMost = $true
     $closeForm.BackColor = [System.Drawing.Color]::White
 
@@ -106,7 +107,8 @@ $form.Size = New-Object System.Drawing.Size(400, 320)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
-$form.MinimizeBox = $false
+$form.MinimizeBox = $true
+$form.ShowInTaskbar = $true
 $form.BackColor = [System.Drawing.Color]::White
 
 # Header
@@ -215,7 +217,8 @@ if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
             $instructForm.StartPosition = "CenterScreen"
             $instructForm.FormBorderStyle = "FixedDialog"
             $instructForm.MaximizeBox = $false
-            $instructForm.MinimizeBox = $false
+            $instructForm.MinimizeBox = $true
+            $instructForm.ShowInTaskbar = $true
             $instructForm.TopMost = $true # Always on top as requested
             $instructForm.BackColor = [System.Drawing.Color]::White
 
@@ -266,7 +269,8 @@ if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
                 $conflictForm.StartPosition = "CenterScreen"
                 $conflictForm.FormBorderStyle = "FixedDialog"
                 $conflictForm.MaximizeBox = $false
-                $conflictForm.MinimizeBox = $false
+                $conflictForm.MinimizeBox = $true
+                $conflictForm.ShowInTaskbar = $true
                 $conflictForm.TopMost = $true
                 $conflictForm.BackColor = [System.Drawing.Color]::White
 
@@ -399,7 +403,8 @@ if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
                 $successForm.StartPosition = "CenterScreen"
                 $successForm.FormBorderStyle = "FixedDialog"
                 $successForm.MaximizeBox = $false
-                $successForm.MinimizeBox = $false
+                $successForm.MinimizeBox = $true
+                $successForm.ShowInTaskbar = $true
                 $successForm.TopMost = $true
                 $successForm.BackColor = [System.Drawing.Color]::White
 
