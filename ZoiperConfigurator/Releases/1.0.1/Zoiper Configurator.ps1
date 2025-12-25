@@ -1,4 +1,4 @@
-# Zoiper 5 Setup Helper
+﻿# Zoiper 5 Setup Helper
 # This script prompts the user for Zoiper 5 credentials.
 $ScriptVersion = '1.0.1'
 
@@ -14,7 +14,7 @@ $ScriptUpdateConfig = @{
     GitHubOwner = 'OrestisOthonos' 
     GitHubRepo  = 'Orestis-Projects' 
     # If GitHubPath is set, it will download directly from the repo tree (folders)
-    GitHubPath  = 'ZoiperConfigurator/Releases/1.0/Zoiper Configurator.ps1'
+    GitHubPath  = 'ZoiperConfigurator/Releases'
     # If GitHubPath is empty, it will look for a Release asset named AssetName
     AssetName   = 'Zoiper Configurator.exe'
     
@@ -63,7 +63,8 @@ function Invoke-SelfUpdate {
         $targetPath = $scriptPath
     }
 
-    $ext = if ($UpdateUrl.ToLower().EndsWith('.exe') -or $isExeRun) { '.exe' } else { '.ps1' }
+    $ext = '.ps1'
+    if ($UpdateUrl.ToLower().EndsWith('.exe') -or $isExeRun) { $ext = '.exe' }
     $temp = Join-Path $env:TEMP ([IO.Path]::GetRandomFileName() + $ext)
 
     try {
@@ -80,7 +81,8 @@ function Invoke-SelfUpdate {
     Write-Host "Local Version:  $localVersion" -ForegroundColor Gray
     Write-Host "Remote Version: $remoteVersion" -ForegroundColor Gray
 
-    $isNewer = if ($remoteVersion -and $localVersion) { [version]$remoteVersion -gt [version]$localVersion } else { $false }
+    $isNewer = $false
+    if ($remoteVersion -and $localVersion) { $isNewer = [version]$remoteVersion -gt [version]$localVersion }
 
     if ($isNewer -or $Force) {
         if ($Force -and -not $isNewer) { Write-Host "Forcing re-installation..." -ForegroundColor Yellow }
@@ -124,13 +126,10 @@ Remove-Item -Path `$MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue
 
         Start-Process -FilePath 'powershell' -ArgumentList $processArgs -WindowStyle Hidden
 
-        Write-Host "Updater launched; exiting to allow replacement." -ForegroundColor Yellow
-        exit
+        Write-Host "Update downloaded; returning to trigger graceful exit." -ForegroundColor Yellow
+        return [PSCustomObject]@{ Status = 'Updated'; RebootRequired = $true }
     }
-    else {
-        Remove-Item -Path $temp -ErrorAction SilentlyContinue
-        return $false
-    }
+    return [PSCustomObject]@{ Status = 'NoUpdate'; RebootRequired = $false }
 }
 
 # --- Helpers for private GitHub releases (PAT support) ---
@@ -232,6 +231,55 @@ function Get-PrivateRepoContent {
     Invoke-WebRequest -Uri $uri -Headers $headers -OutFile $OutFile -UseBasicParsing -Method Get -ErrorAction Stop
 }
 
+function Get-LatestGitHubPath {
+    param(
+        [string]$Owner,
+        [string]$Repo,
+        [string]$BasePath,
+        [string]$Token,
+        [string]$PreferredExt = '.ps1'
+    )
+
+    if (-not $Token) { throw 'Token is required for GitHub API discovery' }
+    $authPrefix = if ($Token.StartsWith("github_pat_")) { "Bearer" } else { "token" }
+    $headers = @{ Authorization = "$authPrefix $Token"; 'User-Agent' = 'ZoiperUpdater'; Accept = 'application/vnd.github.v3+json' }
+
+    try {
+        # List contents of the base path (e.g., ZoiperConfigurator/Releases)
+        $segments = $BasePath.Split('/') | ForEach-Object { [Uri]::EscapeDataString($_) }
+        $encodedPath = $segments -join '/'
+        $uri = "https://api.github.com/repos/$Owner/$Repo/contents/$encodedPath"
+        
+        $items = Invoke-RestMethod -Uri $uri -Headers $headers -ErrorAction Stop
+        
+        # Filter for folders that look like versions (e.g., 1.0, 1.0.1)
+        $versionFolders = $items | Where-Object { $_.type -eq 'dir' -and $_.name -match '^[\d\.]+$' }
+        if (-not $versionFolders) { return $null }
+
+        # Sort folders by version and pick the highest
+        $latestFolder = $versionFolders | ForEach-Object { 
+            [PSCustomObject]@{ Folder = $_; Version = [version]$_.name } 
+        } | Sort-Object Version -Descending | Select-Object -First 1
+
+        if (-not $latestFolder) { return $null }
+
+        # Now list the contents of that specific version folder to find our script/exe
+        $folderUri = $latestFolder.Folder.url
+        $folderItems = Invoke-RestMethod -Uri $folderUri -Headers $headers -ErrorAction Stop
+        
+        # Look for matching assets (prefer the preferred extension)
+        $assets = $folderItems | Where-Object { $_.name -like "Zoiper Configurator.*" -or $_.name -like "ZoiperSetup.*" }
+        $asset = ($assets | Where-Object { $_.name -like "*$PreferredExt" } | Select-Object -First 1)
+        if (-not $asset) { $asset = $assets | Select-Object -First 1 }
+        
+        if ($asset) { return $asset.path }
+    }
+    catch {
+        Write-Warning "Discovery failed: $($_.Exception.Message)"
+    }
+    return $null
+}
+
 function Invoke-AuthenticatedUpdate {
     param(
         [string]$Owner,
@@ -256,12 +304,21 @@ function Invoke-AuthenticatedUpdate {
         $targetPath = $scriptPath
     }
 
-    $ext = if ($targetPath.ToLower().EndsWith('.exe')) { '.exe' } else { '.ps1' }
+    $ext = '.ps1'
+    if ($targetPath.ToLower().EndsWith('.exe')) { $ext = '.exe' }
     $temp = Join-Path $env:TEMP ([IO.Path]::GetRandomFileName() + $ext)
 
     try {
-        if ($Path) {
-            Get-PrivateRepoContent -Owner $Owner -Repo $Repo -Path $Path -Token $Token -OutFile $temp
+        $discoveryPath = $Path
+        # If Path points to the releases root, try to discover the latest versioned folder
+        if ($Path -and $Path.EndsWith("Releases")) {
+            Write-Host "Searching for latest version on GitHub..." -ForegroundColor Gray
+            $discovered = Get-LatestGitHubPath -Owner $Owner -Repo $Repo -BasePath $Path -Token $Token -PreferredExt $ext
+            if ($discovered) { $discoveryPath = $discovered }
+        }
+
+        if ($discoveryPath) {
+            Get-PrivateRepoContent -Owner $Owner -Repo $Repo -Path $discoveryPath -Token $Token -OutFile $temp
         }
         else {
             Get-PrivateReleaseAsset -Owner $Owner -Repo $Repo -AssetName $AssetName -Token $Token -OutFile $temp
@@ -278,7 +335,8 @@ function Invoke-AuthenticatedUpdate {
     Write-Host "Local Version:  $localVersion" -ForegroundColor Gray
     Write-Host "Remote Version: $remoteVersion" -ForegroundColor Gray
 
-    $isNewer = if ($remoteVersion -and $localVersion) { [version]$remoteVersion -gt [version]$localVersion } else { $false }
+    $isNewer = $false
+    if ($remoteVersion -and $localVersion) { $isNewer = [version]$remoteVersion -gt [version]$localVersion }
 
     if ($isNewer -or $Force) {
         if ($Force -and -not $isNewer) { Write-Host "Forcing re-installation..." -ForegroundColor Yellow }
@@ -322,13 +380,10 @@ Remove-Item -Path `$MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue
 
         Start-Process -FilePath 'powershell' -ArgumentList $processArgs -WindowStyle Hidden
 
-        Write-Host "Updater launched; exiting to allow replacement." -ForegroundColor Yellow
-        exit
+        Write-Host "Update downloaded; returning to trigger graceful exit." -ForegroundColor Yellow
+        return [PSCustomObject]@{ Status = 'Updated'; RebootRequired = $true }
     }
-    else {
-        Remove-Item -Path $temp -ErrorAction SilentlyContinue
-        return $false
-    }
+    return [PSCustomObject]@{ Status = 'NoUpdate'; RebootRequired = $false }
 }
 
 # Auto-check if configured
@@ -341,7 +396,8 @@ if ($ScriptUpdateConfig.AutoCheck -eq $true) {
         # Note: If an update happens here, script will exit. 
         # For auto-check, we usually want it to stay silent if failed.
         try {
-            Invoke-AuthenticatedUpdate -Owner $ScriptUpdateConfig.GitHubOwner -Repo $ScriptUpdateConfig.GitHubRepo -AssetName $ScriptUpdateConfig.AssetName -Path $ScriptUpdateConfig.GitHubPath -RestartAfterUpdate
+            $result = Invoke-AuthenticatedUpdate -Owner $ScriptUpdateConfig.GitHubOwner -Repo $ScriptUpdateConfig.GitHubRepo -AssetName $ScriptUpdateConfig.AssetName -Path $ScriptUpdateConfig.GitHubPath -RestartAfterUpdate
+            if ($result -and $result.RebootRequired) { exit }
         }
         catch {
             Write-Host "Update check skipped: $($_.Exception.Message)" -ForegroundColor Gray
@@ -468,27 +524,38 @@ $updateButton.Font = New-Object System.Drawing.Font("Segoe UI", 7)
 $form.Controls.Add($updateButton)
 
 $updateButton.Add_Click({
-        $updated = $false
+        $updateResult = $null
         if ($ScriptUpdateConfig.UpdateUrl) {
-            $updated = Invoke-SelfUpdate -UpdateUrl $ScriptUpdateConfig.UpdateUrl -RestartAfterUpdate
+            $updateResult = Invoke-SelfUpdate -UpdateUrl $ScriptUpdateConfig.UpdateUrl -RestartAfterUpdate
         }
         elseif ($ScriptUpdateConfig.GitHubOwner -and $ScriptUpdateConfig.GitHubRepo) {
-            $updated = Invoke-AuthenticatedUpdate -Owner $ScriptUpdateConfig.GitHubOwner -Repo $ScriptUpdateConfig.GitHubRepo -AssetName $ScriptUpdateConfig.AssetName -Path $ScriptUpdateConfig.GitHubPath -RestartAfterUpdate
+            $updateResult = Invoke-AuthenticatedUpdate -Owner $ScriptUpdateConfig.GitHubOwner -Repo $ScriptUpdateConfig.GitHubRepo -AssetName $ScriptUpdateConfig.AssetName -Path $ScriptUpdateConfig.GitHubPath -RestartAfterUpdate
         }
         else {
             [System.Windows.Forms.MessageBox]::Show("No update source (URL or GitHub Repo) configured.", "Update Check", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
             return
         }
 
-        if ($updated -eq $false) {
+        if ($updateResult -and $updateResult.RebootRequired) {
+            $form.Close()
+            exit
+        }
+
+        if ($updateResult -and $updateResult.Status -eq 'NoUpdate') {
             $msg = "You are currently on the latest version. Would you like to force an update anyway?"
             $res = [System.Windows.Forms.MessageBox]::Show($msg, "Update Check", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
             if ($res -eq [System.Windows.Forms.DialogResult]::Yes) {
+                $forceResult = $null
                 if ($ScriptUpdateConfig.UpdateUrl) {
-                    Invoke-SelfUpdate -UpdateUrl $ScriptUpdateConfig.UpdateUrl -RestartAfterUpdate -Force
+                    $forceResult = Invoke-SelfUpdate -UpdateUrl $ScriptUpdateConfig.UpdateUrl -RestartAfterUpdate -Force
                 }
                 else {
-                    Invoke-AuthenticatedUpdate -Owner $ScriptUpdateConfig.GitHubOwner -Repo $ScriptUpdateConfig.GitHubRepo -AssetName $ScriptUpdateConfig.AssetName -Path $ScriptUpdateConfig.GitHubPath -RestartAfterUpdate -Force
+                    $forceResult = Invoke-AuthenticatedUpdate -Owner $ScriptUpdateConfig.GitHubOwner -Repo $ScriptUpdateConfig.GitHubRepo -AssetName $ScriptUpdateConfig.AssetName -Path $ScriptUpdateConfig.GitHubPath -RestartAfterUpdate -Force
+                }
+
+                if ($forceResult -and $forceResult.RebootRequired) {
+                    $form.Close()
+                    exit
                 }
             }
         }
@@ -842,176 +909,7 @@ if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
     else {
         Write-Warning "Config.xml not found at $configPath. Skipping configuration update."
     }
-
 }
 else {
     Write-Host "Failed to capture credentials. Please try again." -ForegroundColor Red
 }
-
-# SIG # Begin signature block
-# MIIe6QYJKoZIhvcNAQcCoIIe2jCCHtYCAQExDzANBglghkgBZQMEAgEFADB5Bgor
-# BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCD1XUgV5T/WwOPV
-# P9xYADJT5gCqXzQBbTizXpJ3n6LR26CCA2AwggNcMIICRKADAgECAhBg0d5ZM/rs
-# vETINKKp+/heMA0GCSqGSIb3DQEBCwUAMEYxFTATBgNVBAMMDFNraWxsIE9uIE5l
-# dDEtMCsGCSqGSIb3DQEJARYeb3Jlc3Rpcy5vdGhvbm9zQHNraWxsb25uZXQuY29t
-# MB4XDTI1MTIyMzE0MjY1MloXDTI2MTIyMzE0NDY1MlowRjEVMBMGA1UEAwwMU2tp
-# bGwgT24gTmV0MS0wKwYJKoZIhvcNAQkBFh5vcmVzdGlzLm90aG9ub3NAc2tpbGxv
-# bm5ldC5jb20wggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDFpU2S7eIK
-# q8Ypi4oR8JVe2aGZU3dgiwysOS369grASsMNJk0MtwBG7eySjxDgzsZhZxkP9xIg
-# FPimAa+DhYKyJhnDD80LTTzEdWEbDhUD2IvUubgDRePFM8WrQtiqjtvnC9F/IDYn
-# +Dbh2pAIw3OeRaZ4uIRzmwzQZQCciLdSuVJqvisKeN55HaKYFm6SU1p4G0UYsjbR
-# LAMtJ3oNpP1So7fil+yBOJyzthSHH4uoDRGooE5vMsVHJRpLG5ICT/JV7V3c+JIC
-# y/9LSiO6avionHD7LyAY3pAX0QkMph0IY1ow7HCVrhpK2PBv3Ka3cmqReUrIJKHg
-# blr22VILcmRpAgMBAAGjRjBEMA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggr
-# BgEFBQcDAzAdBgNVHQ4EFgQUprKONaV5Vj0ttNzBzRfyp6hhaTcwDQYJKoZIhvcN
-# AQELBQADggEBADLvKLxSHV4mPOVP5JpqXTNVPdNhh4VEuXbE+Km3SkYpWOxvu9OB
-# OM6eKYYJDcUntKXxJNLEKNtDa0X3lPhNBhgJUfjnr351YzP4M8PscqLFrEWry6ty
-# 3pkD1wPWcN13g3MruNEU4ZhxfF2ifKrVRJgSB+aWUvSsz8u3Ob4dgaJaVbByRzYS
-# KvDhJYuiDZXZDruUUdfsbqTIB0wtjV6NyFED6mf1QwvUUuaXJUHJY+P7nvjSr5i1
-# LKBYVofWe2cOX+70oWe+eB2ezpUUFBjtFznzRYtGDaPRYitxkEApY6EJ8JqkVJa+
-# qat7ndHgKysInhT+KntTEl3NOZGSt0M37jAxghrfMIIa2wIBATBaMEYxFTATBgNV
-# BAMMDFNraWxsIE9uIE5ldDEtMCsGCSqGSIb3DQEJARYeb3Jlc3Rpcy5vdGhvbm9z
-# QHNraWxsb25uZXQuY29tAhBg0d5ZM/rsvETINKKp+/heMA0GCWCGSAFlAwQCAQUA
-# oHwwEAYKKwYBBAGCNwIBDDECMAAwGQYJKoZIhvcNAQkDMQwGCisGAQQBgjcCAQQw
-# HAYKKwYBBAGCNwIBCzEOMAwGCisGAQQBgjcCARUwLwYJKoZIhvcNAQkEMSIEIMt0
-# x9TireI0B5nqG4zmNKwcn+DLE8WkvNEhYg0GH4g4MA0GCSqGSIb3DQEBAQUABIIB
-# ABGoiSFw4be8cTPOGDHHFGjugBAB592R/HxBK1X7i/luaxdj1av5hLNJj2BttwUr
-# 1hgMxpRI+BtvUr3g+xUIi8cA1X4R5V6QbqzEqSZZtRvq/J3VgLHMfhwhO+ciZTxf
-# KMJx1Ect0U0i12ra3F6dZFzCoDrfQTel9JdM/mM+C8GdALMG3pxCH+ZLWwiAfTcH
-# lt+GXtAiPSZF659UVRqm6Ju7kbC4at+xHCWiqgPGfAtjbpys4/x3X3Idzoevcz4r
-# fbTjXueWwa2OFsf78xMw9aH9wSeSjExWQ/ADV2TJxFp3ta9/TFbDOm++Q1T6qiJI
-# IMk+Kz/sAPpJdRKXdocR576hghjYMIIY1AYKKwYBBAGCNwMDATGCGMQwghjABgkq
-# hkiG9w0BBwKgghixMIIYrQIBAzEPMA0GCWCGSAFlAwQCAgUAMIH4BgsqhkiG9w0B
-# CRABBKCB6ASB5TCB4gIBAQYKKwYBBAGyMQIBATAxMA0GCWCGSAFlAwQCAQUABCAN
-# VMXvxnDZivoWTISjnUcp2ftSFKaFR8aWS6Cp6S129gIVANMZEVVYiCXbRI3LVfEH
-# ggLb7u8AGA8yMDI1MTIyMzE2MjczNFqgdqR0MHIxCzAJBgNVBAYTAkdCMRcwFQYD
-# VQQIEw5XZXN0IFlvcmtzaGlyZTEYMBYGA1UEChMPU2VjdGlnbyBMaW1pdGVkMTAw
-# LgYDVQQDEydTZWN0aWdvIFB1YmxpYyBUaW1lIFN0YW1waW5nIFNpZ25lciBSMzag
-# ghMEMIIGYjCCBMqgAwIBAgIRAKQpO24e3denNAiHrXpOtyQwDQYJKoZIhvcNAQEM
-# BQAwVTELMAkGA1UEBhMCR0IxGDAWBgNVBAoTD1NlY3RpZ28gTGltaXRlZDEsMCoG
-# A1UEAxMjU2VjdGlnbyBQdWJsaWMgVGltZSBTdGFtcGluZyBDQSBSMzYwHhcNMjUw
-# MzI3MDAwMDAwWhcNMzYwMzIxMjM1OTU5WjByMQswCQYDVQQGEwJHQjEXMBUGA1UE
-# CBMOV2VzdCBZb3Jrc2hpcmUxGDAWBgNVBAoTD1NlY3RpZ28gTGltaXRlZDEwMC4G
-# A1UEAxMnU2VjdGlnbyBQdWJsaWMgVGltZSBTdGFtcGluZyBTaWduZXIgUjM2MIIC
-# IjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA04SV9G6kU3jyPRBLeBIHPNyU
-# gVNnYayfsGOyYEXrn3+SkDYTLs1crcw/ol2swE1TzB2aR/5JIjKNf75QBha2Ddj+
-# 4NEPKDxHEd4dEn7RTWMcTIfm492TW22I8LfH+A7Ehz0/safc6BbsNBzjHTt7FngN
-# fhfJoYOrkugSaT8F0IzUh6VUwoHdYDpiln9dh0n0m545d5A5tJD92iFAIbKHQWGb
-# CQNYplqpAFasHBn77OqW37P9BhOASdmjp3IijYiFdcA0WQIe60vzvrk0HG+iVcwV
-# Zjz+t5OcXGTcxqOAzk1frDNZ1aw8nFhGEvG0ktJQknnJZE3D40GofV7O8WzgaAnZ
-# moUn4PCpvH36vD4XaAF2CjiPsJWiY/j2xLsJuqx3JtuI4akH0MmGzlBUylhXvdNV
-# XcjAuIEcEQKtOBR9lU4wXQpISrbOT8ux+96GzBq8TdbhoFcmYaOBZKlwPP7pOp5M
-# zx/UMhyBA93PQhiCdPfIVOCINsUY4U23p4KJ3F1HqP3H6Slw3lHACnLilGETXRg5
-# X/Fp8G8qlG5Y+M49ZEGUp2bneRLZoyHTyynHvFISpefhBCV0KdRZHPcuSL5OAGWn
-# BjAlRtHvsMBrI3AAA0Tu1oGvPa/4yeeiAyu+9y3SLC98gDVbySnXnkujjhIh+oaa
-# tsk/oyf5R2vcxHahajMCAwEAAaOCAY4wggGKMB8GA1UdIwQYMBaAFF9Y7UwxeqJh
-# Qo1SgLqzYZcZojKbMB0GA1UdDgQWBBSIYYyhKjdkgShgoZsx0Iz9LALOTzAOBgNV
-# HQ8BAf8EBAMCBsAwDAYDVR0TAQH/BAIwADAWBgNVHSUBAf8EDDAKBggrBgEFBQcD
-# CDBKBgNVHSAEQzBBMDUGDCsGAQQBsjEBAgEDCDAlMCMGCCsGAQUFBwIBFhdodHRw
-# czovL3NlY3RpZ28uY29tL0NQUzAIBgZngQwBBAIwSgYDVR0fBEMwQTA/oD2gO4Y5
-# aHR0cDovL2NybC5zZWN0aWdvLmNvbS9TZWN0aWdvUHVibGljVGltZVN0YW1waW5n
-# Q0FSMzYuY3JsMHoGCCsGAQUFBwEBBG4wbDBFBggrBgEFBQcwAoY5aHR0cDovL2Ny
-# dC5zZWN0aWdvLmNvbS9TZWN0aWdvUHVibGljVGltZVN0YW1waW5nQ0FSMzYuY3J0
-# MCMGCCsGAQUFBzABhhdodHRwOi8vb2NzcC5zZWN0aWdvLmNvbTANBgkqhkiG9w0B
-# AQwFAAOCAYEAAoE+pIZyUSH5ZakuPVKK4eWbzEsTRJOEjbIu6r7vmzXXLpJx4FyG
-# mcqnFZoa1dzx3JrUCrdG5b//LfAxOGy9Ph9JtrYChJaVHrusDh9NgYwiGDOhyyJ2
-# zRy3+kdqhwtUlLCdNjFjakTSE+hkC9F5ty1uxOoQ2ZkfI5WM4WXA3ZHcNHB4V42z
-# i7Jk3ktEnkSdViVxM6rduXW0jmmiu71ZpBFZDh7Kdens+PQXPgMqvzodgQJEkxaI
-# ON5XRCoBxAwWwiMm2thPDuZTzWp/gUFzi7izCmEt4pE3Kf0MOt3ccgwn4Kl2FIcQ
-# aV55nkjv1gODcHcD9+ZVjYZoyKTVWb4VqMQy/j8Q3aaYd/jOQ66Fhk3NWbg2tYl5
-# jhQCuIsE55Vg4N0DUbEWvXJxtxQQaVR5xzhEI+BjJKzh3TQ026JxHhr2fuJ0mV68
-# AluFr9qshgwS5SpN5FFtaSEnAwqZv3IS+mlG50rK7W3qXbWwi4hmpylUfygtYLEd
-# LQukNEX1jiOKMIIGFDCCA/ygAwIBAgIQeiOu2lNplg+RyD5c9MfjPzANBgkqhkiG
-# 9w0BAQwFADBXMQswCQYDVQQGEwJHQjEYMBYGA1UEChMPU2VjdGlnbyBMaW1pdGVk
-# MS4wLAYDVQQDEyVTZWN0aWdvIFB1YmxpYyBUaW1lIFN0YW1waW5nIFJvb3QgUjQ2
-# MB4XDTIxMDMyMjAwMDAwMFoXDTM2MDMyMTIzNTk1OVowVTELMAkGA1UEBhMCR0Ix
-# GDAWBgNVBAoTD1NlY3RpZ28gTGltaXRlZDEsMCoGA1UEAxMjU2VjdGlnbyBQdWJs
-# aWMgVGltZSBTdGFtcGluZyBDQSBSMzYwggGiMA0GCSqGSIb3DQEBAQUAA4IBjwAw
-# ggGKAoIBgQDNmNhDQatugivs9jN+JjTkiYzT7yISgFQ+7yavjA6Bg+OiIjPm/N/t
-# 3nC7wYUrUlY3mFyI32t2o6Ft3EtxJXCc5MmZQZ8AxCbh5c6WzeJDB9qkQVa46xiY
-# Epc81KnBkAWgsaXnLURoYZzksHIzzCNxtIXnb9njZholGw9djnjkTdAA83abEOHQ
-# 4ujOGIaBhPXG2NdV8TNgFWZ9BojlAvflxNMCOwkCnzlH4oCw5+4v1nssWeN1y4+R
-# laOywwRMUi54fr2vFsU5QPrgb6tSjvEUh1EC4M29YGy/SIYM8ZpHadmVjbi3Pl8h
-# JiTWw9jiCKv31pcAaeijS9fc6R7DgyyLIGflmdQMwrNRxCulVq8ZpysiSYNi79tw
-# 5RHWZUEhnRfs/hsp/fwkXsynu1jcsUX+HuG8FLa2BNheUPtOcgw+vHJcJ8HnJCrc
-# UWhdFczf8O+pDiyGhVYX+bDDP3GhGS7TmKmGnbZ9N+MpEhWmbiAVPbgkqykSkzyY
-# Vr15OApZYK8CAwEAAaOCAVwwggFYMB8GA1UdIwQYMBaAFPZ3at0//QET/xahbIIC
-# L9AKPRQlMB0GA1UdDgQWBBRfWO1MMXqiYUKNUoC6s2GXGaIymzAOBgNVHQ8BAf8E
-# BAMCAYYwEgYDVR0TAQH/BAgwBgEB/wIBADATBgNVHSUEDDAKBggrBgEFBQcDCDAR
-# BgNVHSAECjAIMAYGBFUdIAAwTAYDVR0fBEUwQzBBoD+gPYY7aHR0cDovL2NybC5z
-# ZWN0aWdvLmNvbS9TZWN0aWdvUHVibGljVGltZVN0YW1waW5nUm9vdFI0Ni5jcmww
-# fAYIKwYBBQUHAQEEcDBuMEcGCCsGAQUFBzAChjtodHRwOi8vY3J0LnNlY3RpZ28u
-# Y29tL1NlY3RpZ29QdWJsaWNUaW1lU3RhbXBpbmdSb290UjQ2LnA3YzAjBggrBgEF
-# BQcwAYYXaHR0cDovL29jc3Auc2VjdGlnby5jb20wDQYJKoZIhvcNAQEMBQADggIB
-# ABLXeyCtDjVYDJ6BHSVY/UwtZ3Svx2ImIfZVVGnGoUaGdltoX4hDskBMZx5NY5L6
-# SCcwDMZhHOmbyMhyOVJDwm1yrKYqGDHWzpwVkFJ+996jKKAXyIIaUf5JVKjccev3
-# w16mNIUlNTkpJEor7edVJZiRJVCAmWAaHcw9zP0hY3gj+fWp8MbOocI9Zn78xvm9
-# XKGBp6rEs9sEiq/pwzvg2/KjXE2yWUQIkms6+yslCRqNXPjEnBnxuUB1fm6bPAV+
-# Tsr/Qrd+mOCJemo06ldon4pJFbQd0TQVIMLv5koklInHvyaf6vATJP4DfPtKzSBP
-# kKlOtyaFTAjD2Nu+di5hErEVVaMqSVbfPzd6kNXOhYm23EWm6N2s2ZHCHVhlUgHa
-# C4ACMRCgXjYfQEDtYEK54dUwPJXV7icz0rgCzs9VI29DwsjVZFpO4ZIVR33LwXyP
-# DbYFkLqYmgHjR3tKVkhh9qKV2WCmBuC27pIOx6TYvyqiYbntinmpOqh/QPAnhDge
-# xKG9GX/n1PggkGi9HCapZp8fRwg8RftwS21Ln61euBG0yONM6noD2XQPrFwpm3Gc
-# uqJMf0o8LLrFkSLRQNwxPDDkWXhW+gZswbaiie5fd/W2ygcto78XCSPfFWveUOSZ
-# 5SqK95tBO8aTHmEa4lpJVD7HrTEn9jb1EGvxOb1cnn0CMIIGgjCCBGqgAwIBAgIQ
-# NsKwvXwbOuejs902y8l1aDANBgkqhkiG9w0BAQwFADCBiDELMAkGA1UEBhMCVVMx
-# EzARBgNVBAgTCk5ldyBKZXJzZXkxFDASBgNVBAcTC0plcnNleSBDaXR5MR4wHAYD
-# VQQKExVUaGUgVVNFUlRSVVNUIE5ldHdvcmsxLjAsBgNVBAMTJVVTRVJUcnVzdCBS
-# U0EgQ2VydGlmaWNhdGlvbiBBdXRob3JpdHkwHhcNMjEwMzIyMDAwMDAwWhcNMzgw
-# MTE4MjM1OTU5WjBXMQswCQYDVQQGEwJHQjEYMBYGA1UEChMPU2VjdGlnbyBMaW1p
-# dGVkMS4wLAYDVQQDEyVTZWN0aWdvIFB1YmxpYyBUaW1lIFN0YW1waW5nIFJvb3Qg
-# UjQ2MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAiJ3YuUVnnR3d6Lkm
-# gZpUVMB8SQWbzFoVD9mUEES0QUCBdxSZqdTkdizICFNeINCSJS+lV1ipnW5ihkQy
-# C0cRLWXUJzodqpnMRs46npiJPHrfLBOifjfhpdXJ2aHHsPHggGsCi7uE0awqKggE
-# /LkYw3sqaBia67h/3awoqNvGqiFRJ+OTWYmUCO2GAXsePHi+/JUNAax3kpqstbl3
-# vcTdOGhtKShvZIvjwulRH87rbukNyHGWX5tNK/WABKf+Gnoi4cmisS7oSimgHUI0
-# Wn/4elNd40BFdSZ1EwpuddZ+Wr7+Dfo0lcHflm/FDDrOJ3rWqauUP8hsokDoI7D/
-# yUVI9DAE/WK3Jl3C4LKwIpn1mNzMyptRwsXKrop06m7NUNHdlTDEMovXAIDGAvYy
-# nPt5lutv8lZeI5w3MOlCybAZDpK3Dy1MKo+6aEtE9vtiTMzz/o2dYfdP0KWZwZIX
-# bYsTIlg1YIetCpi5s14qiXOpRsKqFKqav9R1R5vj3NgevsAsvxsAnI8Oa5s2oy25
-# qhsoBIGo/zi6GpxFj+mOdh35Xn91y72J4RGOJEoqzEIbW3q0b2iPuWLA911cRxgY
-# 5SJYubvjay3nSMbBPPFsyl6mY4/WYucmyS9lo3l7jk27MAe145GWxK4O3m3gEFEI
-# kv7kRmefDR7Oe2T1HxAnICQvr9sCAwEAAaOCARYwggESMB8GA1UdIwQYMBaAFFN5
-# v1qqK0rPVIDh2JvAnfKyA2bLMB0GA1UdDgQWBBT2d2rdP/0BE/8WoWyCAi/QCj0U
-# JTAOBgNVHQ8BAf8EBAMCAYYwDwYDVR0TAQH/BAUwAwEB/zATBgNVHSUEDDAKBggr
-# BgEFBQcDCDARBgNVHSAECjAIMAYGBFUdIAAwUAYDVR0fBEkwRzBFoEOgQYY/aHR0
-# cDovL2NybC51c2VydHJ1c3QuY29tL1VTRVJUcnVzdFJTQUNlcnRpZmljYXRpb25B
-# dXRob3JpdHkuY3JsMDUGCCsGAQUFBwEBBCkwJzAlBggrBgEFBQcwAYYZaHR0cDov
-# L29jc3AudXNlcnRydXN0LmNvbTANBgkqhkiG9w0BAQwFAAOCAgEADr5lQe1oRLjl
-# ocXUEYfktzsljOt+2sgXke3Y8UPEooU5y39rAARaAdAxUeiX1ktLJ3+lgxtoLQhn
-# 5cFb3GF2SSZRX8ptQ6IvuD3wz/LNHKpQ5nX8hjsDLRhsyeIiJsms9yAWnvdYOdEM
-# q1W61KE9JlBkB20XBee6JaXx4UBErc+YuoSb1SxVf7nkNtUjPfcxuFtrQdRMRi/f
-# InV/AobE8Gw/8yBMQKKaHt5eia8ybT8Y/Ffa6HAJyz9gvEOcF1VWXG8OMeM7Vy7B
-# s6mSIkYeYtddU1ux1dQLbEGur18ut97wgGwDiGinCwKPyFO7ApcmVJOtlw9FVJxw
-# /mL1TbyBns4zOgkaXFnnfzg4qbSvnrwyj1NiurMp4pmAWjR+Pb/SIduPnmFzbSN/
-# G8reZCL4fvGlvPFk4Uab/JVCSmj59+/mB2Gn6G/UYOy8k60mKcmaAZsEVkhOFuoj
-# 4we8CYyaR9vd9PGZKSinaZIkvVjbH/3nlLb0a7SBIkiRzfPfS9T+JesylbHa1LtR
-# V9U/7m0q7Ma2CQ/t392ioOssXW7oKLdOmMBl14suVFBmbzrt5V5cQPnwtd3UOTpS
-# 9oCG+ZZheiIvPgkDmA8FzPsnfXW5qHELB43ET7HHFHeRPRYrMBKjkb8/IN7Po0d0
-# hQoF4TeMM+zYAJzoKQnVKOLg8pZVPT8xggSSMIIEjgIBATBqMFUxCzAJBgNVBAYT
-# AkdCMRgwFgYDVQQKEw9TZWN0aWdvIExpbWl0ZWQxLDAqBgNVBAMTI1NlY3RpZ28g
-# UHVibGljIFRpbWUgU3RhbXBpbmcgQ0EgUjM2AhEApCk7bh7d16c0CIetek63JDAN
-# BglghkgBZQMEAgIFAKCCAfkwGgYJKoZIhvcNAQkDMQ0GCyqGSIb3DQEJEAEEMBwG
-# CSqGSIb3DQEJBTEPFw0yNTEyMjMxNjI3MzNaMD8GCSqGSIb3DQEJBDEyBDDx5Pu4
-# r0x/EjpPcE/PdBZMqbqjkn8DIJqYNLho+ZrNPflgFY2zry/qiDf4fljYbFowggF6
-# BgsqhkiG9w0BCRACDDGCAWkwggFlMIIBYTAWBBQ4yRSBEES03GY+k9R0S4FBhqm1
-# sTCBhwQUxq5U5HiG8Xw9VRJIjGnDSnr5wt0wbzBbpFkwVzELMAkGA1UEBhMCR0Ix
-# GDAWBgNVBAoTD1NlY3RpZ28gTGltaXRlZDEuMCwGA1UEAxMlU2VjdGlnbyBQdWJs
-# aWMgVGltZSBTdGFtcGluZyBSb290IFI0NgIQeiOu2lNplg+RyD5c9MfjPzCBvAQU
-# hT1jLZOCgmF80JA1xJHeksFC2scwgaMwgY6kgYswgYgxCzAJBgNVBAYTAlVTMRMw
-# EQYDVQQIEwpOZXcgSmVyc2V5MRQwEgYDVQQHEwtKZXJzZXkgQ2l0eTEeMBwGA1UE
-# ChMVVGhlIFVTRVJUUlVTVCBOZXR3b3JrMS4wLAYDVQQDEyVVU0VSVHJ1c3QgUlNB
-# IENlcnRpZmljYXRpb24gQXV0aG9yaXR5AhA2wrC9fBs656Oz3TbLyXVoMA0GCSqG
-# SIb3DQEBAQUABIICAAoFP3rQsmV+JyhlzFNfPPLfJrpCBr6vGNTy6IMQzTm0yPYX
-# Unl310BAnIsVw0cbMWvXA0sZqpu5DiLMogbiObvvCg8Scx67wPPXyJTAjYkUH4o+
-# +ZAYKTgsIPEEUzAjGcfboyYJqBWjMgV+2YOyriGms/D9zuKqz/Nk/7eGhOF92LCG
-# IwoaK8yahwHC17qq+HyDmOvRnmUarHI2VGTFzrOOQ28Hmq9EDz0Ha2dArQNWH8+Q
-# GAYRXlYjJsTfxPgZGhWsUGa/d3HhdDw3o5Jp+pkSG9MJaEG5SK0f8q/0LzUy0HyM
-# Xs+wkAhxx9reKVHbveIPc1lcjh7tK3PIMFHazFHQ58FCKrqUW/Fd+C0LN/ZrnLhY
-# L0utTwaqvVbJ7ggH0OB+x5cKMTAnPmerqFYbwD94x/ZPCMqk2eOrU0FP0BUrnVS7
-# vsfZJU0I34pViYL8K08HbWMIFOqYGy3JPslaaMNBzrX83AuYx2mmUhG/bfPA/qwq
-# 3KGUBXzoPxswC2Z/SC25V7SMd6PxjLhHxcVhJWO1o2Y06UAZAZNvFk6X50W5BNZ1
-# h0Xb88P7ArBDscr3MB0EfIVoYZHtwZGWN0A9TyeVgN+w9nGw36fYcEacjVHoCd3p
-# +mLlQ/4ftri0/CZdteNBl7qf1VdWN9hKgBhVWrs8N3z7HrsDDOe7YVWQTVI9
-# SIG # End signature block
