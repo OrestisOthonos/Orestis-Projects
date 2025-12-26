@@ -9,17 +9,16 @@ $ScriptVersion = '1.0.2'
 $ScriptUpdateConfig = @{ 
     # Example public releases URL:
     # 'https://github.com/OWNER/REPO/releases/latest/download/ZoiperConfigurator.exe'
-    UpdateUrl   = '' 
+    UpdateUrl    = '' 
     
-    # Private GitHub Repo Configuration (Used for authenticated updates)
-    GitHubOwner = 'OrestisOthonos' 
-    GitHubRepo  = 'Orestis-Projects' 
-    # If GitHubPath is set, it will download directly from the repo tree (folders)
-    GitHubPath  = 'ZoiperConfigurator/Releases'
-    # If GitHubPath is empty, it will look for a Release asset named AssetName
-    AssetName   = 'Zoiper Configurator.exe'
+    # Public GitHub Repo Configuration
+    GitHubOwner  = 'OrestisOthonos' 
+    GitHubRepo   = 'Orestis-Projects' 
+    GitHubBranch = 'main'
+    # Path to the releases folder in the repo
+    GitHubPath   = 'ZoiperConfigurator/Releases'
     
-    AutoCheck   = $true # Set to $true to check for updates automatically on start
+    AutoCheck    = $true # Set to $true to check for updates automatically on start
 }
 
 function Get-CurrentScriptPath {
@@ -152,101 +151,37 @@ function Get-GitHubToken {
     return $null
 }
 
-# If no PAT is present in the environment, offer a one-time interactive paste
+# --- Public GitHub Download Functions ---
 
-# Optional embedded DPAPI-encrypted PAT (user-scoped).
-$EncryptedPAT = '01000000d08c9ddf0115d1118c7a00c04fc297eb01000000eba8995160e5a84da0c072cc844b5c280000000002000000000010660000000100002000000001912b6220a5dc0002841fccf7f6e5e605b10f69b7753cf9c2560c45ced65425000000000e80000000020000200000005be30710f0167d3f7f89ab2caca1feadc0af5399a1a51dcb96d86df21dbe79a6c00000009b93e83e67a5473e37eb5a5c63c48f82056a5dade556d22d3c903fa07841d9cc3a5cb2daf3bd7365bbc5b981cf67941e5c5b6ace639fb73271d7fa38d01556a89f6ed655bf1963028c7eb3a69f50e77f4cce03f9c70473030ebc39fd2edf8690e763efca4100b6b28073eedc57c978a62af92f5a90ed83e509ace42be76f441c5c73d3c898016f879fbd4de61da889c0d1bf893b2686c36a544d77b62caf1bfcbb3013ceec8a2929492d44a93c39f67631f7d311a537a6bb6817b4a3aa1b53d340000000f91247e3d9b143d3647dabc48920ce7b1abe36acc37ec35a47ed606d9c9e3e807cfe2180e770919d01918b44a799a85135c10434add807786d4ac1c5f98b6328'
-
-if ($EncryptedPAT -and $EncryptedPAT -ne 'PASTE_ENCRYPTED_STRING_HERE') {
-    try {
-        $secure = ConvertTo-SecureString -String $EncryptedPAT
-        $plain = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
-        if ($plain) {
-            # Priority: use embedded PAT if it's the one we just updated
-            $env:GITHUB_PAT = $plain
-            Write-Host "GITHUB_PAT loaded successfully from embedded blob." -ForegroundColor Green
-        }
-    }
-    catch {
-        Write-Warning "Failed to decrypt embedded PAT: $_"
-    }
-}
-elseif ($env:GITHUB_PAT) {
-    Write-Host "Using GITHUB_PAT from environment variable." -ForegroundColor Cyan
-}
-else {
-    Write-Host "No GITHUB_PAT found in environment or embedded." -ForegroundColor Red
-}
-
-function Get-PrivateReleaseAsset {
+function Get-PublicRepoContent {
     param(
         [string]$Owner,
         [string]$Repo,
-        [string]$AssetName,
-        [string]$Token,
-        [string]$OutFile
-    )
-
-    if (-not $Token) { throw 'Token is required to download private release asset' }
-
-    # GitHub fine-grained PATs work with "token" as well, and it's often more compatible.
-    $authPrefix = if ($Token.StartsWith("github_pat_")) { "Bearer" } else { "token" }
-    $headers = @{ Authorization = "$authPrefix $Token"; 'User-Agent' = 'ZoiperUpdater'; Accept = 'application/vnd.github+json' }
-    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Owner/$Repo/releases/latest" -Headers $headers -ErrorAction Stop
-
-    $asset = $release.assets | Where-Object { $_.name -eq $AssetName }
-    if (-not $asset) { throw "Asset not found in latest release: $AssetName" }
-
-    $assetId = $asset.id
-    $downloadUri = "https://api.github.com/repos/$Owner/$Repo/releases/assets/$assetId"
-
-    $dlHeaders = @{ Authorization = "$authPrefix $Token"; 'User-Agent' = 'ZoiperUpdater'; Accept = 'application/octet-stream' }
-    Invoke-WebRequest -Uri $downloadUri -Headers $dlHeaders -OutFile $OutFile -UseBasicParsing -Method Get -ErrorAction Stop
-}
-
-function Get-PrivateRepoContent {
-    param(
-        [string]$Owner,
-        [string]$Repo,
+        [string]$Branch,
         [string]$Path,
-        [string]$Token,
         [string]$OutFile
     )
-
-    if (-not $Token) { throw 'Token is required to download private repo content' }
-
-    $authPrefix = if ($Token.StartsWith("github_pat_")) { "Bearer" } else { "token" }
-    # Use the Contents API with the 'raw' media type to get the file content directly
-    $headers = @{ 
-        Authorization = "$authPrefix $Token"
-        'User-Agent'  = 'ZoiperUpdater'
-        Accept        = 'application/vnd.github.v3.raw'
-    }
     
-    # Encode the path segments to handle spaces while keeping slashes literal for the URI
-    $segments = $Path.Split('/') | ForEach-Object { [Uri]::EscapeDataString($_) }
-    $encodedPath = $segments -join '/'
-    $uri = "https://api.github.com/repos/$Owner/$Repo/contents/$encodedPath"
+    # Use GitHub's raw content URL for public repos
+    $uri = "https://raw.githubusercontent.com/$Owner/$Repo/$Branch/$Path"
     
     Write-Host "Downloading: $Path..." -ForegroundColor Gray
-    Invoke-WebRequest -Uri $uri -Headers $headers -OutFile $OutFile -UseBasicParsing -Method Get -ErrorAction Stop
+    Invoke-WebRequest -Uri $uri -OutFile $OutFile -UseBasicParsing -Method Get -ErrorAction Stop
 }
 
-function Get-LatestGitHubPath {
+function Get-LatestPublicGitHubPath {
     param(
         [string]$Owner,
         [string]$Repo,
+        [string]$Branch,
         [string]$BasePath,
-        [string]$Token,
         [string]$PreferredExt = '.ps1'
     )
 
-    if (-not $Token) { throw 'Token is required for GitHub API discovery' }
-    $authPrefix = if ($Token.StartsWith("github_pat_")) { "Bearer" } else { "token" }
-    $headers = @{ Authorization = "$authPrefix $Token"; 'User-Agent' = 'ZoiperUpdater'; Accept = 'application/vnd.github.v3+json' }
+    $headers = @{ 'User-Agent' = 'ZoiperUpdater'; Accept = 'application/vnd.github.v3+json' }
 
     try {
-        # List contents of the base path (e.g., ZoiperConfigurator/Releases)
+        # List contents of the base path using GitHub API (works for public repos without auth)
         $segments = $BasePath.Split('/') | ForEach-Object { [Uri]::EscapeDataString($_) }
         $encodedPath = $segments -join '/'
         $uri = "https://api.github.com/repos/$Owner/$Repo/contents/$encodedPath"
@@ -281,18 +216,15 @@ function Get-LatestGitHubPath {
     return $null
 }
 
-function Invoke-AuthenticatedUpdate {
+function Invoke-PublicUpdate {
     param(
         [string]$Owner,
         [string]$Repo,
-        [string]$AssetName,
+        [string]$Branch,
         [string]$Path,
         [switch]$RestartAfterUpdate,
-        [string]$Token,
         [switch]$Force
     )
-
-    if (-not $Token) { $Token = Get-GitHubToken }
 
     $proc = [System.Diagnostics.Process]::GetCurrentProcess()
     $currentProcessPath = $proc.MainModule.FileName
@@ -314,20 +246,20 @@ function Invoke-AuthenticatedUpdate {
         # If Path points to the releases root, try to discover the latest versioned folder
         if ($Path -and $Path.EndsWith("Releases")) {
             Write-Host "Searching for latest version on GitHub..." -ForegroundColor Gray
-            $discovered = Get-LatestGitHubPath -Owner $Owner -Repo $Repo -BasePath $Path -Token $Token -PreferredExt $ext
+            $discovered = Get-LatestPublicGitHubPath -Owner $Owner -Repo $Repo -Branch $Branch -BasePath $Path -PreferredExt $ext
             if ($discovered) { $discoveryPath = $discovered }
         }
 
         if ($discoveryPath) {
-            Get-PrivateRepoContent -Owner $Owner -Repo $Repo -Path $discoveryPath -Token $Token -OutFile $temp
+            Get-PublicRepoContent -Owner $Owner -Repo $Repo -Branch $Branch -Path $discoveryPath -OutFile $temp
         }
         else {
-            Get-PrivateReleaseAsset -Owner $Owner -Repo $Repo -AssetName $AssetName -Token $Token -OutFile $temp
+            throw "No valid download path found"
         }
         Start-Sleep -Milliseconds 200
     }
     catch {
-        Write-Warning "Failed to download private asset: $_"
+        Write-Warning "Failed to download update: $_"
         return
     }
 
@@ -342,7 +274,7 @@ function Invoke-AuthenticatedUpdate {
 
     if ($isNewer -or $Force) {
         if ($Force -and -not $isNewer) { Write-Host "Forcing re-installation..." -ForegroundColor Yellow }
-        else { Write-Host "Authenticated update found ($remoteVersion) — installing..." -ForegroundColor Cyan }
+        else { Write-Host "Update found ($remoteVersion) — installing..." -ForegroundColor Cyan }
 
         $updaterPath = Join-Path $env:TEMP ("zoiper_updater_" + [IO.Path]::GetRandomFileName() + ".ps1")
         $parentPid = $PID
@@ -398,7 +330,7 @@ if ($ScriptUpdateConfig.AutoCheck -eq $true) {
         # Note: If an update happens here, script will exit. 
         # For auto-check, we usually want it to stay silent if failed.
         try {
-            $result = Invoke-AuthenticatedUpdate -Owner $ScriptUpdateConfig.GitHubOwner -Repo $ScriptUpdateConfig.GitHubRepo -AssetName $ScriptUpdateConfig.AssetName -Path $ScriptUpdateConfig.GitHubPath -RestartAfterUpdate
+            $result = Invoke-PublicUpdate -Owner $ScriptUpdateConfig.GitHubOwner -Repo $ScriptUpdateConfig.GitHubRepo -Branch $ScriptUpdateConfig.GitHubBranch -Path $ScriptUpdateConfig.GitHubPath -RestartAfterUpdate
             if ($result -and $result.RebootRequired) { exit }
         }
         catch {
@@ -594,7 +526,7 @@ $updateButton.Add_Click({
             $updateResult = Invoke-SelfUpdate -UpdateUrl $ScriptUpdateConfig.UpdateUrl -RestartAfterUpdate
         }
         elseif ($ScriptUpdateConfig.GitHubOwner -and $ScriptUpdateConfig.GitHubRepo) {
-            $updateResult = Invoke-AuthenticatedUpdate -Owner $ScriptUpdateConfig.GitHubOwner -Repo $ScriptUpdateConfig.GitHubRepo -AssetName $ScriptUpdateConfig.AssetName -Path $ScriptUpdateConfig.GitHubPath -RestartAfterUpdate
+            $updateResult = Invoke-PublicUpdate -Owner $ScriptUpdateConfig.GitHubOwner -Repo $ScriptUpdateConfig.GitHubRepo -Branch $ScriptUpdateConfig.GitHubBranch -Path $ScriptUpdateConfig.GitHubPath -RestartAfterUpdate
         }
         else {
             [System.Windows.Forms.MessageBox]::Show("No update source configured.", "Update Check", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
@@ -615,7 +547,7 @@ $updateButton.Add_Click({
                     $forceResult = Invoke-SelfUpdate -UpdateUrl $ScriptUpdateConfig.UpdateUrl -RestartAfterUpdate -Force
                 }
                 else {
-                    $forceResult = Invoke-AuthenticatedUpdate -Owner $ScriptUpdateConfig.GitHubOwner -Repo $ScriptUpdateConfig.GitHubRepo -AssetName $ScriptUpdateConfig.AssetName -Path $ScriptUpdateConfig.GitHubPath -RestartAfterUpdate -Force
+                    $forceResult = Invoke-PublicUpdate -Owner $ScriptUpdateConfig.GitHubOwner -Repo $ScriptUpdateConfig.GitHubRepo -Branch $ScriptUpdateConfig.GitHubBranch -Path $ScriptUpdateConfig.GitHubPath -RestartAfterUpdate -Force
                 }
 
                 if ($forceResult -and $forceResult.RebootRequired) {
