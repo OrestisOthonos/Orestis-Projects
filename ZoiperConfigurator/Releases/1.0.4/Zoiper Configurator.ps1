@@ -22,8 +22,23 @@ $ScriptUpdateConfig = @{
 }
 
 function Get-CurrentScriptPath {
+    # Try $PSCommandPath first (works for .ps1 scripts)
     if ($PSCommandPath) { return $PSCommandPath }
-    if ($MyInvocation -and $MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path) { return $MyInvocation.MyCommand.Path }
+    
+    # Try $MyInvocation (works in some contexts)
+    if ($MyInvocation -and $MyInvocation.MyCommand -and $MyInvocation.MyCommand.Path) { 
+        return $MyInvocation.MyCommand.Path 
+    }
+    
+    # For ps2exe compiled scripts, get the executable path
+    try {
+        $proc = [System.Diagnostics.Process]::GetCurrentProcess()
+        if ($proc.MainModule.FileName) {
+            return $proc.MainModule.FileName
+        }
+    }
+    catch { }
+    
     return $null
 }
 
