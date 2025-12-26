@@ -91,7 +91,7 @@ function Invoke-SelfUpdate {
     }
 
     $localVersion = $ScriptVersion
-    $remoteVersion = Get-VersionFromFile `"$temp`"
+    $remoteVersion = Get-VersionFromFile $temp
 
     Write-Host "Local Version:  $localVersion" -ForegroundColor Gray
     Write-Host "Remote Version: $remoteVersion" -ForegroundColor Gray
@@ -136,7 +136,7 @@ Remove-Item -Path `$MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue
 
         $updaterScript | Out-File -FilePath $updaterPath -Encoding UTF8
 
-        $processArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $updaterPath, '--', '-Target', "'$($targetPath.Replace("'", "''"))'", '-Source', "'$($temp.Replace("'", "''"))'", '-ParentPid', $parentPid)
+        $processArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $updaterPath, '--', '-Target', $targetPath, '-Source', $temp, '-ParentPid', $parentPid)
         if ($RestartAfterUpdate) { $processArgs += '-Restart' }
 
         Start-Process -FilePath 'powershell' -ArgumentList $processArgs -WindowStyle Hidden
@@ -312,7 +312,7 @@ function Invoke-PublicUpdate {
 
         if ($discoveryPath) {
             Write-Host "Attempting download from: $discoveryPath" -ForegroundColor Gray
-            Get-PublicRepoContent -Owner $Owner -Repo $Repo -Branch $Branch -Path $discoveryPath -OutFile `"$temp`"
+            Get-PublicRepoContent -Owner $Owner -Repo $Repo -Branch $Branch -Path $discoveryPath -OutFile $temp
         }
         else {
             throw "No valid download path found"
@@ -325,7 +325,7 @@ function Invoke-PublicUpdate {
     }
 
     $localVersion = $ScriptVersion
-    $remoteVersion = Get-VersionFromFile `"$temp`"
+    $remoteVersion = Get-VersionFromFile $temp
 
     Write-Host "Local Version:  $localVersion" -ForegroundColor Gray
     Write-Host "Remote Version: $remoteVersion" -ForegroundColor Gray
