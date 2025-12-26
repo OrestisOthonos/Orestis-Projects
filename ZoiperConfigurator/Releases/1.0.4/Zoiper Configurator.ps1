@@ -1,7 +1,7 @@
 ﻿# Test
 # Zoiper 5 Setup Helper
 # This script prompts the user for Zoiper 5 credentials.
-$ScriptVersion = '1.0.4'
+$ScriptVersion = '1.0.3'
 
 # --- Self-update configuration ---
 # Set `UpdateUrl` to your public release download URL or leave empty and use the
@@ -217,6 +217,18 @@ function Get-LatestPublicGitHubPath {
         if ($asset) { return $asset.path }
     }
     catch {
+        # If API fails (rate limit, etc.), try a smart fallback
+        if ($_.Exception.Message -match '403|rate limit') {
+            Write-Host "GitHub API rate limit reached. Assuming next version exists..." -ForegroundColor Yellow
+            
+            # Just try the next incremental version
+            $currentVer = [version]$ScriptVersion
+            $nextVer = "$($currentVer.Major).$($currentVer.Minor).$($currentVer.Build + 1)"
+            $testPath = "$BasePath/$nextVer/Zoiper Configurator$PreferredExt"
+            
+            Write-Host "Attempting version $nextVer (rate limit fallback)" -ForegroundColor Cyan
+            return $testPath
+        }
         Write-Warning "Discovery failed: $($_.Exception.Message)"
     }
     return $null
@@ -232,14 +244,15 @@ function Invoke-PublicUpdate {
         [switch]$Force
     )
 
-    $proc = [System.Diagnostics.Process]::GetCurrentProcess()
-    $currentProcessPath = $proc.MainModule.FileName
-    $isExeRun = $currentProcessPath -and ($currentProcessPath.ToLower().EndsWith('.exe'))
+    # Determine if we're running as .ps1 or .exe by checking the actual script path
+    $scriptPath = Get-CurrentScriptPath
+    $isExeRun = $scriptPath -and ($scriptPath.ToLower().EndsWith('.exe'))
 
-    if ($isExeRun) { $targetPath = $currentProcessPath }
+    if ($isExeRun) { 
+        $targetPath = $scriptPath
+    }
     else {
-        $scriptPath = Get-CurrentScriptPath
-        if (-not $scriptPath) { Write-Warning "Cannot determine current script path. Authenticated update aborted."; return }
+        if (-not $scriptPath) { Write-Warning "Cannot determine current script path. Update aborted."; return }
         $targetPath = $scriptPath
     }
 
@@ -253,10 +266,17 @@ function Invoke-PublicUpdate {
         if ($Path -and $Path.EndsWith("Releases")) {
             Write-Host "Searching for latest version on GitHub..." -ForegroundColor Gray
             $discovered = Get-LatestPublicGitHubPath -Owner $Owner -Repo $Repo -Branch $Branch -BasePath $Path -PreferredExt $ext
-            if ($discovered) { $discoveryPath = $discovered }
+            if ($discovered) { 
+                $discoveryPath = $discovered 
+                Write-Host "Discovered path: $discoveryPath" -ForegroundColor Cyan
+            }
+            else {
+                Write-Warning "No version discovered, falling back to base path"
+            }
         }
 
         if ($discoveryPath) {
+            Write-Host "Attempting download from: $discoveryPath" -ForegroundColor Gray
             Get-PublicRepoContent -Owner $Owner -Repo $Repo -Branch $Branch -Path $discoveryPath -OutFile $temp
         }
         else {
