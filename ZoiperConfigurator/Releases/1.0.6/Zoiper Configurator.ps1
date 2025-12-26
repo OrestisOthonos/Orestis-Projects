@@ -106,66 +106,57 @@ function Invoke-SelfUpdate {
         $parentPid = $PID
 
             $updaterScript = @'
-    param(
-        [string]$Target,
-        [string]$Source,
-        [int]$ParentPid,
-        [switch]$Restart,
-        [string]$LogDirectory = 'C:\Temp\zoiper_logs'
-    )
+param(
+    [string]$Target,
+    [string]$Source,
+    [int]$ParentPid,
+    [switch]$Restart,
+    [string]$LogDirectory = 'C:\Temp\zoiper_logs'
+)
 
-    $logDir = $LogDirectory
-    try { [IO.Directory]::CreateDirectory($logDir) | Out-Null } catch { }
-    $log = Join-Path $logDir 'zoiper_updater_debug.log'
-    "$((Get-Date).ToString('o')) - Updater started. Target=$Target Source=$Source ParentPid=$ParentPid Restart=$Restart" | Out-File -FilePath $log -Append
+try { [IO.Directory]::CreateDirectory($LogDirectory) | Out-Null } catch { }
+$log = Join-Path $LogDirectory 'zoiper_updater_debug.log'
+"$((Get-Date).ToString('o')) - Updater started. Target=$Target Source=$Source ParentPid=$ParentPid Restart=$Restart" | Out-File -FilePath $log -Append
 
-    $maxWaitSeconds = 60
-    $startTime = Get-Date
-    while (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue) {
-        if ((Get-Date) - $startTime -gt [TimeSpan]::FromSeconds($maxWaitSeconds)) {
-            "$((Get-Date).ToString('o')) - Timeout waiting for parent PID $ParentPid after $maxWaitSeconds seconds; continuing with update." | Out-File -FilePath $log -Append
-            break
-        }
-        Start-Sleep -Milliseconds 300
+$maxWaitSeconds = 60
+$startTime = Get-Date
+while (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue) {
+    if ((Get-Date) - $startTime -gt [TimeSpan]::FromSeconds($maxWaitSeconds)) {
+        "$((Get-Date).ToString('o')) - Timeout waiting for parent PID $ParentPid after $maxWaitSeconds seconds; continuing with update." | Out-File -FilePath $log -Append
+        break
     }
+    Start-Sleep -Milliseconds 300
+}
 
-    $removalSucceeded = $true
+try {
+    if (Test-Path -Path $Target) {
+        "$((Get-Date).ToString('o')) - Removing existing target: $Target" | Out-File -FilePath $log -Append
+        Remove-Item -Path $Target -Force -ErrorAction Stop
+    }
+} catch { "$((Get-Date).ToString('o')) - Error removing target: $_" | Out-File -FilePath $log -Append }
+
+try {
+    "$((Get-Date).ToString('o')) - Copying $Source -> $Target" | Out-File -FilePath $log -Append
+    Copy-Item -Path $Source -Destination $Target -Force
+    "$((Get-Date).ToString('o')) - Copy succeeded" | Out-File -FilePath $log -Append
+} catch { "$((Get-Date).ToString('o')) - Copy failed: $_" | Out-File -FilePath $log -Append; exit 1 }
+
+if ($Restart) {
     try {
-    } catch { "$((Get-Date).ToString('o')) - Copy failed: $_" | Out-File -FilePath $log -Append; exit 1 }
-            "$((Get-Date).ToString('o')) - Removing existing target: $Target" | Out-File -FilePath $log -Append
-            Remove-Item -Path $Target -Force -ErrorAction Stop
+        if ($Target.ToLower().EndsWith('.ps1')) {
+            "$((Get-Date).ToString('o')) - Starting PS with args: -File $Target" | Out-File -FilePath $log -Append
+            Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$Target)
+        } else {
+            "$((Get-Date).ToString('o')) - Starting exe: $Target" | Out-File -FilePath $log -Append
+            Start-Process -FilePath $Target
         }
-    } catch {
-        $removalSucceeded = $false
-        "$((Get-Date).ToString('o')) - Error removing target: $_" | Out-File -FilePath $log -Append
-    }
+        "$((Get-Date).ToString('o')) - Start-Process invoked successfully" | Out-File -FilePath $log -Append
+    } catch { "$((Get-Date).ToString('o')) - Failed to start process: $_" | Out-File -FilePath $log -Append }
+}
 
-    if (-not $removalSucceeded) {
-        "$((Get-Date).ToString('o')) - Removal of target failed. Skipping copy operation and exiting updater." | Out-File -FilePath $log -Append
-        exit 1
-    }
-    try {
-        "$((Get-Date).ToString('o')) - Copying $Source -> $Target" | Out-File -FilePath $log -Append
-        Copy-Item -Path $Source -Destination $Target -Force
-        "$((Get-Date).ToString('o')) - Copy succeeded" | Out-File -FilePath $log -Append
-    } catch { "$((Get-Date).ToString('o')) - Copy failed: $_" | Out-File -FilePath $log -Append; exit 1 }
-
-    if ($Restart) {
-        try {
-            if ($Target.ToLower().EndsWith('.ps1')) {
-                "$((Get-Date).ToString('o')) - Starting PS with args: -File $Target" | Out-File -FilePath $log -Append
-                Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$Target)
-            } else {
-                "$((Get-Date).ToString('o')) - Starting exe: $Target" | Out-File -FilePath $log -Append
-                Start-Process -FilePath $Target
-            }
-            "$((Get-Date).ToString('o')) - Start-Process invoked successfully" | Out-File -FilePath $log -Append
-        } catch { "$((Get-Date).ToString('o')) - Failed to start process: $_" | Out-File -FilePath $log -Append }
-    }
-
-    try { Remove-Item -Path $Source -ErrorAction SilentlyContinue } catch { }
-    Start-Sleep -Milliseconds 200
-    try { Remove-Item -Path $MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue } catch { }
+try { Remove-Item -Path $Source -ErrorAction SilentlyContinue } catch { }
+Start-Sleep -Milliseconds 200
+try { Remove-Item -Path $MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue } catch { }
 '@
 
         $updaterScript | Out-File -FilePath $updaterPath -Encoding UTF8
