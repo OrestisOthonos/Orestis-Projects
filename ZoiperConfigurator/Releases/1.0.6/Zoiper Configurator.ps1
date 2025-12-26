@@ -128,6 +128,7 @@ function Invoke-SelfUpdate {
             "$(Get-Date -Format o) - Failed to install update automatically: $_" | Out-File -FilePath $prelog -Append -Encoding UTF8
             [System.Windows.Forms.MessageBox]::Show("The update could not be installed automatically. Please close any running instances and copy the file:`n$temp`nto:`n$targetPath","Update Failed",[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
             return [PSCustomObject]@{ Status = 'Updated'; RebootRequired = $true }
+        }
         $updaterPath = Join-Path $env:TEMP ("zoiper_updater_" + [IO.Path]::GetRandomFileName() + ".ps1")
         $parentPid = $PID
 
