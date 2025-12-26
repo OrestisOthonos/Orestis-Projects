@@ -194,8 +194,14 @@ function Get-LatestPublicGitHubPath {
 
         # Sort folders by version and pick the highest
         $latestFolder = $versionFolders | ForEach-Object { 
-            [PSCustomObject]@{ Folder = $_; Version = [version]$_.name } 
-        } | Sort-Object Version -Descending | Select-Object -First 1
+            try {
+                [PSCustomObject]@{ Folder = $_; Version = [version]$_.name }
+            }
+            catch {
+                # Skip folders that don't parse as valid versions
+                Write-Verbose "Skipping invalid version folder: $($_.name)"
+            }
+        } | Where-Object { $_.Version } | Sort-Object Version -Descending | Select-Object -First 1
 
         if (-not $latestFolder) { return $null }
 
