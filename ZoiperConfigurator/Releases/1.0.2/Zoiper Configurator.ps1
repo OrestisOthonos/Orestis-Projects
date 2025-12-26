@@ -1,7 +1,7 @@
 ﻿# Test
 # Zoiper 5 Setup Helper
 # This script prompts the user for Zoiper 5 credentials.
-$ScriptVersion = '1.0.1'
+$ScriptVersion = '1.0.2'
 
 # --- Self-update configuration ---
 # Set `UpdateUrl` to your public release download URL or leave empty and use the
@@ -511,7 +511,7 @@ if (Get-Process -Name "Zoiper5" -ErrorAction SilentlyContinue) {
 # Create the form
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Zoiper 5 Setup"
-$form.Size = New-Object System.Drawing.Size(400, 345)
+$form.Size = New-Object System.Drawing.Size(400, 360)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
@@ -519,11 +519,74 @@ $form.MinimizeBox = $true
 $form.ShowInTaskbar = $true
 $form.BackColor = [System.Drawing.Color]::White
 
-# Button: Check for Updates (Top-Left, Small)
-$updateButton = New-StyledButton "Check for Updates" 5 5 $false
-$updateButton.Size = New-Object System.Drawing.Size(110, 22)
-$updateButton.Font = New-Object System.Drawing.Font("Segoe UI", 7)
-$form.Controls.Add($updateButton)
+# Create TabControl
+$tabControl = New-Object System.Windows.Forms.TabControl
+$tabControl.Location = New-Object System.Drawing.Point(0, 0)
+$tabControl.Size = New-Object System.Drawing.Size(384, 260)
+$tabControl.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$form.Controls.Add($tabControl)
+
+# Tab 1: Configuration
+$tabConfig = New-Object System.Windows.Forms.TabPage
+$tabConfig.Text = "Configuration"
+$tabConfig.BackColor = [System.Drawing.Color]::White
+$tabControl.Controls.Add($tabConfig)
+
+# Header
+$header = New-StyledLabel "Zoiper 5 Configuration" 15 $true
+$tabConfig.Controls.Add($header)
+
+$subHeader = New-StyledLabel "Please enter your extension details below." 45
+$subHeader.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$tabConfig.Controls.Add($subHeader)
+
+# Label: Extension Number
+$labelExtension = New-StyledLabel "Extension Number" 85
+$tabConfig.Controls.Add($labelExtension)
+
+# TextBox: Extension Number
+$textBoxExtension = New-Object System.Windows.Forms.TextBox
+$textBoxExtension.Location = New-Object System.Drawing.Point(25, 110)
+$textBoxExtension.Size = New-Object System.Drawing.Size(320, 26)
+$textBoxExtension.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+$tabConfig.Controls.Add($textBoxExtension)
+
+# Label: Password
+$labelPassword = New-StyledLabel "Password" 150
+$tabConfig.Controls.Add($labelPassword)
+
+# TextBox: Password
+$textBoxPassword = New-Object System.Windows.Forms.TextBox
+$textBoxPassword.Location = New-Object System.Drawing.Point(25, 175)
+$textBoxPassword.Size = New-Object System.Drawing.Size(320, 26)
+$textBoxPassword.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+$textBoxPassword.PasswordChar = "●"
+$tabConfig.Controls.Add($textBoxPassword)
+
+# Tab 2: About
+$tabAbout = New-Object System.Windows.Forms.TabPage
+$tabAbout.Text = "About"
+$tabAbout.BackColor = [System.Drawing.Color]::White
+$tabControl.Controls.Add($tabAbout)
+
+# About Content
+$aboutHeader = New-StyledLabel "Zoiper Configurator" 20 $true
+$tabAbout.Controls.Add($aboutHeader)
+
+$versionLabel = New-StyledLabel "Version: $ScriptVersion" 50
+$tabAbout.Controls.Add($versionLabel)
+
+$vendorLabel = New-StyledLabel "Vendor: Skill On Net" 75
+$tabAbout.Controls.Add($vendorLabel)
+
+$descLabel = New-StyledLabel "This utility automates the configuration of Zoiper 5`nwith the Skill On Net SIP settings." 110
+$descLabel.Size = New-Object System.Drawing.Size(330, 50)
+$tabAbout.Controls.Add($descLabel)
+
+# Button: Check for Updates in About Tab
+$updateButton = New-StyledButton "Check for Updates" 25 170 $false
+$updateButton.Size = New-Object System.Drawing.Size(150, 35)
+$tabAbout.Controls.Add($updateButton)
 
 $updateButton.Add_Click({
         $updateResult = $null
@@ -534,7 +597,7 @@ $updateButton.Add_Click({
             $updateResult = Invoke-AuthenticatedUpdate -Owner $ScriptUpdateConfig.GitHubOwner -Repo $ScriptUpdateConfig.GitHubRepo -AssetName $ScriptUpdateConfig.AssetName -Path $ScriptUpdateConfig.GitHubPath -RestartAfterUpdate
         }
         else {
-            [System.Windows.Forms.MessageBox]::Show("No update source (URL or GitHub Repo) configured.", "Update Check", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            [System.Windows.Forms.MessageBox]::Show("No update source configured.", "Update Check", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
             return
         }
 
@@ -563,59 +626,28 @@ $updateButton.Add_Click({
         }
     })
 
-# Header
-$header = New-StyledLabel "Zoiper 5 Configuration" 45 $true
-$form.Controls.Add($header)
-
-$subHeader = New-StyledLabel "Please enter your extension details below." 75
-$subHeader.Font = New-Object System.Drawing.Font("Segoe UI", 9)
-$form.Controls.Add($subHeader)
-
-# Label: Extension Number
-$labelExtension = New-StyledLabel "Extension Number" 115
-$form.Controls.Add($labelExtension)
-
-# TextBox: Extension Number
-$textBoxExtension = New-Object System.Windows.Forms.TextBox
-$textBoxExtension.Location = New-Object System.Drawing.Point(25, 140)
-$textBoxExtension.Size = New-Object System.Drawing.Size(330, 26)
-$textBoxExtension.Font = New-Object System.Drawing.Font("Segoe UI", 10)
-$form.Controls.Add($textBoxExtension)
-
-# Label: Password
-$labelPassword = New-StyledLabel "Password" 180
-$form.Controls.Add($labelPassword)
-
-# TextBox: Password
-$textBoxPassword = New-Object System.Windows.Forms.TextBox
-$textBoxPassword.Location = New-Object System.Drawing.Point(25, 205)
-$textBoxPassword.Size = New-Object System.Drawing.Size(330, 26)
-$textBoxPassword.Font = New-Object System.Drawing.Font("Segoe UI", 10)
-$textBoxPassword.PasswordChar = "●"
-$form.Controls.Add($textBoxPassword)
-
 # Separator line
 $line = New-Object System.Windows.Forms.Label
-$line.Location = New-Object System.Drawing.Point(0, 255)
+$line.Location = New-Object System.Drawing.Point(0, 265)
 $line.Size = New-Object System.Drawing.Size(400, 1)
 $line.BackColor = [System.Drawing.Color]::FromArgb(220, 220, 220)
 $form.Controls.Add($line)
 
 # Button Panel Background
 $buttonPanel = New-Object System.Windows.Forms.Panel
-$buttonPanel.Location = New-Object System.Drawing.Point(0, 256)
-$buttonPanel.Size = New-Object System.Drawing.Size(400, 50)
+$buttonPanel.Location = New-Object System.Drawing.Point(0, 266)
+$buttonPanel.Size = New-Object System.Drawing.Size(400, 55)
 $buttonPanel.BackColor = [System.Drawing.Color]::FromArgb(245, 245, 245)
 $form.Controls.Add($buttonPanel)
 
 # Button: OK (Save)
-$okButton = New-StyledButton "Save" 170 8 $true
+$okButton = New-StyledButton "Save" 170 10 $true
 $okButton.DialogResult = [System.Windows.Forms.DialogResult]::OK
 $form.AcceptButton = $okButton
 $buttonPanel.Controls.Add($okButton)
 
 # Button: Cancel
-$cancelButton = New-StyledButton "Cancel" 280 8 $false
+$cancelButton = New-StyledButton "Cancel" 280 10 $false
 $cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
 $form.CancelButton = $cancelButton
 $buttonPanel.Controls.Add($cancelButton)
