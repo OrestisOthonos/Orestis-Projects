@@ -105,128 +105,38 @@ function Invoke-SelfUpdate {
         if ($Force -and -not $isNewer) { Write-Host "Forcing re-installation..." -ForegroundColor Yellow }
         else { Write-Host "Update found ($remoteVersion) — installing..." -ForegroundColor Cyan }
 
-        # Downloaded update; new flow: notify the user and attempt to install when they acknowledge.
+        # Setup logging
         $logDir = Join-Path $env:TEMP 'zoiper_logs'
         try { [IO.Directory]::CreateDirectory($logDir) | Out-Null } catch { }
-        $prelog = Join-Path $logDir 'zoiper_updater_prelaunch.log'
-        "$(Get-Date -Format o) - Update ready at: $temp; Target=$targetPath; RemoteVersion=$remoteVersion" | Out-File -FilePath $prelog -Append -Encoding UTF8
+        $logFile = Join-Path $logDir 'zoiper_updater.log'
+        "$(Get-Date -Format o) - Update ready. Source=$temp; Target=$targetPath; RemoteVersion=$remoteVersion" | Out-File -FilePath $logFile -Append -Encoding UTF8
 
+        # Show notification to user
         Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
-        $msg = "A new version ($remoteVersion) has been downloaded and is ready to be installed.`n`nPlease close the Zoiper Configurator and then click OK to complete installation. You will need to relaunch the application manually after installation." 
+        $msg = "A new version ($remoteVersion) has been downloaded and is ready to be installed.`n`nClick OK to install the update. The application will close and you will need to relaunch it manually after installation." 
         [System.Windows.Forms.MessageBox]::Show($msg, "Update Ready", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
 
+        # Attempt to install the update
         $backup = "$targetPath.old"
         try {
-            if (Test-Path -Path $targetPath) { Move-Item -Path $targetPath -Destination $backup -Force -ErrorAction Stop }
+            if (Test-Path -Path $targetPath) { 
+                "$(Get-Date -Format o) - Creating backup: $backup" | Out-File -FilePath $logFile -Append -Encoding UTF8
+                Move-Item -Path $targetPath -Destination $backup -Force -ErrorAction Stop 
+            }
+            "$(Get-Date -Format o) - Installing update: $temp -> $targetPath" | Out-File -FilePath $logFile -Append -Encoding UTF8
             Copy-Item -Path $temp -Destination $targetPath -Force -ErrorAction Stop
             if (Test-Path -Path $backup) { Remove-Item -Path $backup -Force -ErrorAction SilentlyContinue }
-            "$(Get-Date -Format o) - Update installed to $targetPath" | Out-File -FilePath $prelog -Append -Encoding UTF8
+            "$(Get-Date -Format o) - Update installed successfully" | Out-File -FilePath $logFile -Append -Encoding UTF8
             try { Remove-Item -Path $temp -ErrorAction SilentlyContinue } catch { }
+            
+            [System.Windows.Forms.MessageBox]::Show("Update installed successfully!`n`nPlease relaunch the Zoiper Configurator to use the new version.", "Update Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
             return [PSCustomObject]@{ Status = 'Updated'; RebootRequired = $true }
         }
         catch {
-            "$(Get-Date -Format o) - Failed to install update automatically: $_" | Out-File -FilePath $prelog -Append -Encoding UTF8
-            [System.Windows.Forms.MessageBox]::Show("The update could not be installed automatically. Please close any running instances and copy the file:`n$temp`nto:`n$targetPath","Update Failed",[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
-            return [PSCustomObject]@{ Status = 'Updated'; RebootRequired = $true }
-        $updaterPath = Join-Path $env:TEMP ("zoiper_updater_" + [IO.Path]::GetRandomFileName() + ".ps1")
-        $parentPid = $PID
-
-        $updaterScript = @'
-param(
-    [string]$Target,
-    [string]$Source,
-    [int]$ParentPid,
-    [switch]$Restart,
-    [string]$LogDirectory,
-    [string]$OriginalArgs
-)
-
-try { [IO.Directory]::CreateDirectory($LogDirectory) | Out-Null } catch { }
-$log = Join-Path $LogDirectory 'zoiper_updater_debug.log'
-"$((Get-Date).ToString('o')) - Updater started. Target=$Target Source=$Source ParentPid=$ParentPid Restart=$Restart OriginalArgs='$OriginalArgs'" | Out-File -FilePath $log -Append
-
-$maxWaitSeconds = 60
-$startTime = Get-Date
-while (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue) {
-    if ((Get-Date) - $startTime -gt [TimeSpan]::FromSeconds($maxWaitSeconds)) {
-        "$((Get-Date).ToString('o')) - Timeout waiting for parent PID $ParentPid after $maxWaitSeconds seconds; continuing with update." | Out-File -FilePath $log -Append
-        break
-    }
-    Start-Sleep -Milliseconds 300
-}
-
-try {
-    if (Test-Path -Path $Target) {
-        "$((Get-Date).ToString('o')) - Removing existing target: $Target" | Out-File -FilePath $log -Append
-        Remove-Item -Path $Target -Force -ErrorAction Stop
-    }
-} catch { "$((Get-Date).ToString('o')) - Error removing target: $_" | Out-File -FilePath $log -Append }
-
-try {
-    "$((Get-Date).ToString('o')) - Copying $Source -> $Target" | Out-File -FilePath $log -Append
-    Copy-Item -Path $Source -Destination $Target -Force
-    "$((Get-Date).ToString('o')) - Copy succeeded" | Out-File -FilePath $log -Append
-} catch { "$((Get-Date).ToString('o')) - Copy failed: $_" | Out-File -FilePath $log -Append; exit 1 }
-
-if ($Restart) {
-    try {
-        $originalArgsArray = if ($OriginalArgs) { $OriginalArgs -split ' ' } else { @() }
-        if ($Target.ToLower().EndsWith('.ps1')) {
-            "$((Get-Date).ToString('o')) - Starting PS with args: -File $Target $originalArgsArray" | Out-File -FilePath $log -Append
-            Start-Process -FilePath 'powershell.exe' -ArgumentList (@('-NoProfile','-ExecutionPolicy','Bypass','-File',$Target) + $originalArgsArray)
-        } else {
-            "$((Get-Date).ToString('o')) - Starting exe: $Target $originalArgsArray" | Out-File -FilePath $log -Append
-            Start-Process -FilePath $Target -ArgumentList $originalArgsArray
+            "$(Get-Date -Format o) - Failed to install update: $_" | Out-File -FilePath $logFile -Append -Encoding UTF8
+            [System.Windows.Forms.MessageBox]::Show("The update could not be installed automatically.`n`nError: $_`n`nPlease close all instances of Zoiper Configurator and manually copy:`n$temp`n`nto:`n$targetPath", "Update Failed", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+            return [PSCustomObject]@{ Status = 'Failed'; RebootRequired = $false }
         }
-        "$((Get-Date).ToString('o')) - Start-Process invoked successfully" | Out-File -FilePath $log -Append
-    } catch { "$((Get-Date).ToString('o')) - Failed to start process: $_" | Out-File -FilePath $log -Append }
-}
-
-try { Remove-Item -Path $Source -ErrorAction SilentlyContinue } catch { }
-Start-Sleep -Milliseconds 200
-try { Remove-Item -Path $MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue } catch { }
-'@
-
-        $updaterScript | Out-File -FilePath $updaterPath -Encoding UTF8
-
-        # Pre-launch debug info (written by the main process)
-        try {
-            $preLogDir = Join-Path $env:TEMP 'zoiper_logs'
-            try { [IO.Directory]::CreateDirectory($preLogDir) | Out-Null } catch { }
-            $prelog = Join-Path $preLogDir 'zoiper_updater_prelaunch.log'
-            "$(Get-Date -Format o) - Updater script written to: $updaterPath" | Out-File -FilePath $prelog -Append -Encoding UTF8
-            "$(Get-Date -Format o) - Updater script exists: $(Test-Path $updaterPath)" | Out-File -FilePath $prelog -Append -Encoding UTF8
-            "$(Get-Date -Format o) - Temp download path: $temp" | Out-File -FilePath $prelog -Append -Encoding UTF8
-        } catch { }
-
-        $processArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $updaterPath, '--', '-Target', $targetPath, '-Source', $temp, '-ParentPid', $parentPid)
-        if ($RestartAfterUpdate) { $processArgs += '-Restart' }
-        $logDir = Join-Path $env:TEMP 'zoiper_logs'
-        $processArgs += '-LogDirectory', $logDir
-        $originalArgsStr = $global:OriginalArgs -join ' '
-        if (-not [string]::IsNullOrWhiteSpace($originalArgsStr)) {
-            $processArgs += '-OriginalArgs', $originalArgsStr
-        }
-
-        try {
-            "$(Get-Date -Format o) - Starting updater process. Arg count: $($processArgs.Count). Args: $($processArgs -join ' ')" | Out-File -FilePath $prelog -Append -Encoding UTF8
-            Start-Process -FilePath 'powershell' -ArgumentList $processArgs -WindowStyle Hidden
-            "$(Get-Date -Format o) - Updater process started successfully" | Out-File -FilePath $prelog -Append -Encoding UTF8
-        } catch {
-            "$(Get-Date -Format o) - Failed to start updater process: $_" | Out-File -FilePath $prelog -Append -Encoding UTF8
-        }
-
-        Write-Host "Update downloaded; returning to trigger graceful exit." -ForegroundColor Yellow
-        return [PSCustomObject]@{ Status = 'Updated'; RebootRequired = $true }
-        $originalArgsStr = $global:OriginalArgs -join ' '
-        if (-not [string]::IsNullOrWhiteSpace($originalArgsStr)) {
-            $processArgs += '-OriginalArgs', $originalArgsStr
-        }
-
-        Start-Process -FilePath 'powershell' -ArgumentList $processArgs -WindowStyle Hidden
-
-        Write-Host "Update downloaded; returning to trigger graceful exit." -ForegroundColor Yellow
-        return [PSCustomObject]@{ Status = 'Updated'; RebootRequired = $true }
     }
     return [PSCustomObject]@{ Status = 'NoUpdate'; RebootRequired = $false }
 }
@@ -421,107 +331,38 @@ function Invoke-PublicUpdate {
         if ($Force -and -not $isNewer) { Write-Host "Forcing re-installation..." -ForegroundColor Yellow }
         else { Write-Host "Update found ($remoteVersion) — installing..." -ForegroundColor Cyan }
 
-        $updaterPath = Join-Path $env:TEMP ("zoiper_updater_" + [IO.Path]::GetRandomFileName() + ".ps1")
-        $parentPid = $PID
-
-        $updaterScript = @'
-param(
-    [string]$Target,
-    [string]$Source,
-    [int]$ParentPid,
-    [switch]$Restart,
-    [string]$LogDirectory,
-    [string]$OriginalArgs
-)
-
-try { [IO.Directory]::CreateDirectory($LogDirectory) | Out-Null } catch { }
-$log = Join-Path $LogDirectory 'zoiper_updater_debug.log'
-"$((Get-Date).ToString('o')) - Updater started. Target=$Target Source=$Source ParentPid=$ParentPid Restart=$Restart OriginalArgs='$OriginalArgs'" | Out-File -FilePath $log -Append
-
-$maxWaitSeconds = 60
-$startTime = Get-Date
-while (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue) {
-    if ((Get-Date) - $startTime -gt [TimeSpan]::FromSeconds($maxWaitSeconds)) {
-        "$((Get-Date).ToString('o')) - Timeout waiting for parent PID $ParentPid after $maxWaitSeconds seconds; continuing with update." | Out-File -FilePath $log -Append
-        break
-    }
-    Start-Sleep -Milliseconds 300
-}
-
-$backupPath = "$Target.old"
-try {
-    if (Test-Path -Path $Target) {
-        "$((Get-Date).ToString('o')) - Renaming target $Target to $backupPath" | Out-File -FilePath $log -Append
-        Move-Item -Path $Target -Destination $backupPath -Force -ErrorAction Stop
-    }
-
-    "$((Get-Date).ToString('o')) - Copying $Source -> $Target" | Out-File -FilePath $log -Append
-    Copy-Item -Path $Source -Destination $Target -Force -ErrorAction Stop
-    "$((Get-Date).ToString('o')) - Copy succeeded" | Out-File -FilePath $log -Append
-    
-    if (Test-Path -Path $backupPath) {
-        "$((Get-Date).ToString('o')) - Removing backup file $backupPath" | Out-File -FilePath $log -Append
-        Remove-Item -Path $backupPath -Force -ErrorAction SilentlyContinue
-    }
-} catch {
-    "$((Get-Date).ToString('o')) - Update failed during file operations: $_" | Out-File -FilePath $log -Append
-    if (Test-Path -Path $backupPath) {
-        "$((Get-Date).ToString('o')) - Attempting to restore backup from $backupPath" | Out-File -FilePath $log -Append
-        Move-Item -Path $backupPath -Destination $Target -Force -ErrorAction SilentlyContinue
-    }
-    exit 1
-}
-
-if ($Restart) {
-    try {
-        $originalArgsArray = if ($OriginalArgs) { $OriginalArgs -split ' ' } else { @() }
-        if ($Target.ToLower().EndsWith('.ps1')) {
-            "$((Get-Date).ToString('o')) - Starting PS with args: -File $Target $originalArgsArray" | Out-File -FilePath $log -Append
-            Start-Process -FilePath 'powershell.exe' -ArgumentList (@('-NoProfile','-ExecutionPolicy','Bypass','-File',$Target) + $originalArgsArray)
-        } else {
-            "$((Get-Date).ToString('o')) - Starting exe: $Target $originalArgsArray" | Out-File -FilePath $log -Append
-            Start-Process -FilePath $Target -ArgumentList $originalArgsArray
-        }
-        "$((Get-Date).ToString('o')) - Start-Process invoked successfully" | Out-File -FilePath $log -Append
-    } catch { "$((Get-Date).ToString('o')) - Failed to start process: $_" | Out-File -FilePath $log -Append }
-}
-
-try { Remove-Item -Path $Source -ErrorAction SilentlyContinue } catch { }
-Start-Sleep -Milliseconds 200
-try { Remove-Item -Path $MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue } catch { }
-'@
-
-        $updaterScript | Out-File -FilePath $updaterPath -Encoding UTF8
-
-        # Pre-launch debug info (written by the main process)
-        try {
-            $preLogDir = Join-Path $env:TEMP 'zoiper_logs'
-            try { [IO.Directory]::CreateDirectory($preLogDir) | Out-Null } catch { }
-            $prelog = Join-Path $preLogDir 'zoiper_updater_prelaunch.log'
-            "$(Get-Date -Format o) - Updater script written to: $updaterPath" | Out-File -FilePath $prelog -Append -Encoding UTF8
-            "$(Get-Date -Format o) - Updater script exists: $(Test-Path $updaterPath)" | Out-File -FilePath $prelog -Append -Encoding UTF8
-            "$(Get-Date -Format o) - Temp download path: $temp" | Out-File -FilePath $prelog -Append -Encoding UTF8
-        } catch { }
-
-        $processArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $updaterPath, '--', '-Target', $targetPath, '-Source', $temp, '-ParentPid', $parentPid)
-        if ($RestartAfterUpdate) { $processArgs += '-Restart' }
+        # Setup logging
         $logDir = Join-Path $env:TEMP 'zoiper_logs'
-        $processArgs += '-LogDirectory', $logDir
-        $originalArgsStr = $global:OriginalArgs -join ' '
-        if (-not [string]::IsNullOrWhiteSpace($originalArgsStr)) {
-            $processArgs += '-OriginalArgs', $originalArgsStr
-        }
+        try { [IO.Directory]::CreateDirectory($logDir) | Out-Null } catch { }
+        $logFile = Join-Path $logDir 'zoiper_updater.log'
+        "$(Get-Date -Format o) - Update ready. Source=$temp; Target=$targetPath; RemoteVersion=$remoteVersion" | Out-File -FilePath $logFile -Append -Encoding UTF8
 
+        # Show notification to user
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+        $msg = "A new version ($remoteVersion) has been downloaded and is ready to be installed.`n`nClick OK to install the update. The application will close and you will need to relaunch it manually after installation." 
+        [System.Windows.Forms.MessageBox]::Show($msg, "Update Ready", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+
+        # Attempt to install the update
+        $backup = "$targetPath.old"
         try {
-            "$(Get-Date -Format o) - Starting updater process. Arg count: $($processArgs.Count). Args: $($processArgs -join ' ')" | Out-File -FilePath $prelog -Append -Encoding UTF8
-            Start-Process -FilePath 'powershell' -ArgumentList $processArgs -WindowStyle Hidden
-            "$(Get-Date -Format o) - Updater process started successfully" | Out-File -FilePath $prelog -Append -Encoding UTF8
-        } catch {
-            "$(Get-Date -Format o) - Failed to start updater process: $_" | Out-File -FilePath $prelog -Append -Encoding UTF8
+            if (Test-Path -Path $targetPath) { 
+                "$(Get-Date -Format o) - Creating backup: $backup" | Out-File -FilePath $logFile -Append -Encoding UTF8
+                Move-Item -Path $targetPath -Destination $backup -Force -ErrorAction Stop 
+            }
+            "$(Get-Date -Format o) - Installing update: $temp -> $targetPath" | Out-File -FilePath $logFile -Append -Encoding UTF8
+            Copy-Item -Path $temp -Destination $targetPath -Force -ErrorAction Stop
+            if (Test-Path -Path $backup) { Remove-Item -Path $backup -Force -ErrorAction SilentlyContinue }
+            "$(Get-Date -Format o) - Update installed successfully" | Out-File -FilePath $logFile -Append -Encoding UTF8
+            try { Remove-Item -Path $temp -ErrorAction SilentlyContinue } catch { }
+            
+            [System.Windows.Forms.MessageBox]::Show("Update installed successfully!`n`nPlease relaunch the Zoiper Configurator to use the new version.", "Update Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+            return [PSCustomObject]@{ Status = 'Updated'; RebootRequired = $true }
         }
-
-        Write-Host "Update downloaded; returning to trigger graceful exit." -ForegroundColor Yellow
-        return [PSCustomObject]@{ Status = 'Updated'; RebootRequired = $true }
+        catch {
+            "$(Get-Date -Format o) - Failed to install update: $_" | Out-File -FilePath $logFile -Append -Encoding UTF8
+            [System.Windows.Forms.MessageBox]::Show("The update could not be installed automatically.`n`nError: $_`n`nPlease close all instances of Zoiper Configurator and manually copy:`n$temp`n`nto:`n$targetPath", "Update Failed", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+            return [PSCustomObject]@{ Status = 'Failed'; RebootRequired = $false }
+        }
     }
     return [PSCustomObject]@{ Status = 'NoUpdate'; RebootRequired = $false }
 }
