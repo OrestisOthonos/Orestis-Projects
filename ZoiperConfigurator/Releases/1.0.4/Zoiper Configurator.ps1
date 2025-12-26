@@ -234,15 +234,35 @@ function Get-LatestPublicGitHubPath {
     catch {
         # If API fails (rate limit, etc.), try a smart fallback
         if ($_.Exception.Message -match '403|rate limit') {
-            Write-Host "GitHub API rate limit reached. Assuming next version exists..." -ForegroundColor Yellow
+            Write-Host "GitHub API rate limit reached. Trying direct version checks..." -ForegroundColor Yellow
             
-            # Just try the next incremental version
+            # First, try the current version (for force reinstalls)
             $currentVer = [version]$ScriptVersion
+            $currentPath = "$BasePath/$ScriptVersion/Zoiper Configurator$PreferredExt"
+            $currentUri = "https://raw.githubusercontent.com/$Owner/$Repo/$Branch/$currentPath"
+            
+            try {
+                $null = Invoke-WebRequest -Uri $currentUri -UseBasicParsing -ErrorAction Stop -TimeoutSec 3
+                Write-Host "Found current version $ScriptVersion (for reinstall)" -ForegroundColor Cyan
+                return $currentPath
+            }
+            catch {
+                # Current version not found, try next version
+            }
+            
+            # Try the next incremental version
             $nextVer = "$($currentVer.Major).$($currentVer.Minor).$($currentVer.Build + 1)"
             $testPath = "$BasePath/$nextVer/Zoiper Configurator$PreferredExt"
+            $testUri = "https://raw.githubusercontent.com/$Owner/$Repo/$Branch/$testPath"
             
-            Write-Host "Attempting version $nextVer (rate limit fallback)" -ForegroundColor Cyan
-            return $testPath
+            try {
+                $null = Invoke-WebRequest -Uri $testUri -UseBasicParsing -ErrorAction Stop -TimeoutSec 3
+                Write-Host "Found version $nextVer" -ForegroundColor Green
+                return $testPath
+            }
+            catch {
+                # Next version doesn't exist either
+            }
         }
         Write-Warning "Discovery failed: $($_.Exception.Message)"
     }
@@ -579,8 +599,15 @@ $updateButton.Add_Click({
             return
         }
 
-        if ($updateResult -and $updateResult.Status -eq 'NoUpdate') {
-            $msg = "You are currently on the latest version. Would you like to force an update anyway?"
+        # If no update was found OR download failed, offer force update
+        if (-not $updateResult -or $updateResult.Status -eq 'NoUpdate') {
+            $msg = if (-not $updateResult) {
+                "Could not find a newer version. Would you like to force reinstall the current version?"
+            }
+            else {
+                "You are currently on the latest version. Would you like to force an update anyway?"
+            }
+            
             $res = [System.Windows.Forms.MessageBox]::Show($msg, "Update Check", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
             if ($res -eq [System.Windows.Forms.DialogResult]::Yes) {
                 $forceResult = $null
