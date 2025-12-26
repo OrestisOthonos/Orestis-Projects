@@ -206,9 +206,17 @@ function Get-PublicRepoContent {
     
     # Use GitHub's raw content URL for public repos
     $uri = "https://raw.githubusercontent.com/$Owner/$Repo/$Branch/$Path"
-    
+
     Write-Host "Downloading: $Path..." -ForegroundColor Gray
-    Invoke-WebRequest -Uri $uri -OutFile $OutFile -UseBasicParsing -Method Get -ErrorAction Stop
+    # If a GitHub token is available, use it to increase rate limit
+    $token = Get-GitHubToken
+    if ($token) {
+        $authHeaders = @{ 'Authorization' = "token $token"; 'User-Agent' = 'ZoiperUpdater' }
+        Invoke-WebRequest -Uri $uri -OutFile $OutFile -Headers $authHeaders -UseBasicParsing -Method Get -ErrorAction Stop
+    }
+    else {
+        Invoke-WebRequest -Uri $uri -OutFile $OutFile -UseBasicParsing -Method Get -ErrorAction Stop
+    }
 }
 
 function Get-LatestPublicGitHubPath {
@@ -221,6 +229,9 @@ function Get-LatestPublicGitHubPath {
     )
 
     $headers = @{ 'User-Agent' = 'ZoiperUpdater'; Accept = 'application/vnd.github.v3+json' }
+    # If a GitHub token is present, add Authorization header to avoid rate limits
+    $token = Get-GitHubToken
+    if ($token) { $headers.Authorization = "token $token" }
 
     try {
         # List contents of the base path using GitHub API (works for public repos without auth)
@@ -260,36 +271,42 @@ function Get-LatestPublicGitHubPath {
     }
     catch {
         # If API fails (rate limit, etc.), try a smart fallback
-        if ($_.Exception.Message -match '403|rate limit') {
-            Write-Host "GitHub API rate limit reached. Trying direct version checks..." -ForegroundColor Yellow
-            
-            # First, try the current version (for force reinstalls)
-            $currentVer = [version]$ScriptVersion
-            $currentPath = "$BasePath/$ScriptVersion/Zoiper Configurator$PreferredExt"
-            $currentUri = "https://raw.githubusercontent.com/$Owner/$Repo/$Branch/$currentPath"
-            
-            try {
-                $null = Invoke-WebRequest -Uri $currentUri -UseBasicParsing -ErrorAction Stop -TimeoutSec 3
-                Write-Host "Found current version $ScriptVersion (for reinstall)" -ForegroundColor Cyan
-                return $currentPath
-            }
-            catch {
-                # Current version not found, try next version
-            }
-            
-            # Try the next incremental version
-            $nextVer = "$($currentVer.Major).$($currentVer.Minor).$($currentVer.Build + 1)"
-            $testPath = "$BasePath/$nextVer/Zoiper Configurator$PreferredExt"
-            $testUri = "https://raw.githubusercontent.com/$Owner/$Repo/$Branch/$testPath"
-            
-            try {
-                $null = Invoke-WebRequest -Uri $testUri -UseBasicParsing -ErrorAction Stop -TimeoutSec 3
-                Write-Host "Found version $nextVer" -ForegroundColor Green
-                return $testPath
-            }
-            catch {
-                # Next version doesn't exist either
-            }
+            if ($_.Exception.Message -match '403|rate limit') {
+                Write-Host "GitHub API rate limit reached. Trying web-scrape discovery..." -ForegroundColor Yellow
+
+                try {
+                    $treeUrl = "https://github.com/$Owner/$Repo/tree/$Branch/$BasePath"
+                    $html = Invoke-WebRequest -Uri $treeUrl -UseBasicParsing -ErrorAction Stop -TimeoutSec 10
+                    $pattern = [regex]::Escape($BasePath) + '/(?<v>\d+\.\d+\.\d+)'
+                    $matches = [regex]::Matches($html.Content, $pattern)
+                    $versions = $matches | ForEach-Object { $_.Groups['v'].Value } | Where-Object { $_ } | Sort-Object -Unique
+                    if ($versions) {
+                        $latest = $versions | ForEach-Object { try { [version]$_ } catch { $null } } | Where-Object { $_ } | Sort-Object -Descending | Select-Object -First 1
+                        if ($latest) {
+                            $foundPath = "$BasePath/$($latest.ToString())/Zoiper Configurator$PreferredExt"
+                            Write-Host "Discovered latest version via web-scrape: $($latest.ToString())" -ForegroundColor Cyan
+                            return $foundPath
+                        }
+                    }
+                }
+                catch {
+                    Write-Verbose "Web-scrape discovery failed: $($_.Exception.Message)"
+                }
+
+                # As a last resort, probe incremental version numbers up to +12 builds
+                $currentVer = [version]$ScriptVersion
+                $maxAttempts = 12
+                for ($i = 0; $i -le $maxAttempts; $i++) {
+                    $verToCheck = "$($currentVer.Major).$($currentVer.Minor).$($currentVer.Build + $i)"
+                    $testPath = "$BasePath/$verToCheck/Zoiper Configurator$PreferredExt"
+                    $testUri = "https://raw.githubusercontent.com/$Owner/$Repo/$Branch/$testPath"
+                    try {
+                        $null = Invoke-WebRequest -Uri $testUri -UseBasicParsing -ErrorAction Stop -TimeoutSec 3
+                        Write-Host "Found version $verToCheck via raw URL probe" -ForegroundColor Green
+                        return $testPath
+                    }
+                    catch { }
+                }
         }
         Write-Warning "Discovery failed: $($_.Exception.Message)"
     }
