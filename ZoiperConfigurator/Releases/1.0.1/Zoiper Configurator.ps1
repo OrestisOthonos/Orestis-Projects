@@ -1,4 +1,5 @@
-﻿# Zoiper 5 Setup Helper
+﻿# Test
+# Zoiper 5 Setup Helper
 # This script prompts the user for Zoiper 5 credentials.
 $ScriptVersion = '1.0.1'
 
@@ -38,7 +39,8 @@ function Get-VersionFromFile($path) {
         $gi = Get-Item $path
         if ($gi.VersionInfo.ProductVersion) { return $gi.VersionInfo.ProductVersion.Trim() }
         if ($gi.VersionInfo.FileVersion) { return $gi.VersionInfo.FileVersion.Trim() }
-    } catch { }
+    }
+    catch { }
     return "0.0.0"
 }
 
