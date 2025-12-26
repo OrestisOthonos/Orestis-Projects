@@ -1,4 +1,5 @@
-﻿# Zoiper 5 Setup Helper
+﻿# Test
+# Zoiper 5 Setup Helper
 # This script prompts the user for Zoiper 5 credentials.
 $ScriptVersion = '1.0.1'
 
