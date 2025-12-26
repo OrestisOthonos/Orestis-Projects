@@ -152,6 +152,16 @@ function Invoke-SelfUpdate {
 '@
 
         $updaterScript | Out-File -FilePath $updaterPath -Encoding UTF8
+        $updaterScript | Out-File -FilePath $updaterPath -Encoding UTF8
+
+        # Pre-launch debug info (written by the main process to Desktop)
+        try {
+            $desktop = [Environment]::GetFolderPath([System.Environment+SpecialFolder]::Desktop)
+            $prelog = Join-Path $desktop 'zoiper_updater_prelaunch.log'
+            "$(Get-Date -Format o) - Updater script written to: $updaterPath" | Out-File -FilePath $prelog -Append -Encoding UTF8
+            "$(Get-Date -Format o) - Updater script exists: $(Test-Path $updaterPath)" | Out-File -FilePath $prelog -Append -Encoding UTF8
+            "$(Get-Date -Format o) - Temp download path: $temp" | Out-File -FilePath $prelog -Append -Encoding UTF8
+        } catch { }
 
         $processArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $updaterPath, '--', '-Target', $targetPath, '-Source', $temp, '-ParentPid', $parentPid)
         if ($RestartAfterUpdate) { $processArgs += '-Restart' }
