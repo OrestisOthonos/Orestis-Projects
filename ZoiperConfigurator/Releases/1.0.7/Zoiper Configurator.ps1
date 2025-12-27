@@ -433,18 +433,18 @@ function Invoke-PublicUpdate {
         $parentPid = $PID
 
         $updaterScript = @'
+param(
+    [string]$Target,
+    [string]$Source,
+    [int]$ParentPid,
+    [switch]$Restart,
+    [string]$LogDirectory,
+    [string]$OriginalArgs
+)
+
 # Hardcoded log for top-level errors
 $ErrorLogPath = Join-Path $env:TEMP 'zoiper_updater_bootstrap_error.log'
 try {
-    param(
-        [string]$Target,
-        [string]$Source,
-        [int]$ParentPid,
-        [switch]$Restart,
-        [string]$LogDirectory,
-        [string]$OriginalArgs
-    )
-
     try { [IO.Directory]::CreateDirectory($LogDirectory) | Out-Null } catch { }
     $log = Join-Path $LogDirectory 'zoiper_updater_debug.log'
     "$((Get-Date).ToString('o')) - Updater started. Target=$Target Source=$Source ParentPid=$ParentPid Restart=$Restart OriginalArgs='$OriginalArgs'" | Out-File -FilePath $log -Append
@@ -510,7 +510,7 @@ try {
     try { Remove-Item -Path $MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue } catch { }
 
 } catch {
-    # This will catch errors from param block, logging setup, etc.
+    # This will catch errors from the main body of the script.
     $errorDetails = $_ | Out-String
     $message = "A critical error occurred in the updater script.`n`nError: $errorDetails"
     "$((Get-Date).ToString('o')) - $message" | Out-File -FilePath $ErrorLogPath -Append
