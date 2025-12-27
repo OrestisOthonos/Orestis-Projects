@@ -1,4 +1,3 @@
-
 # Zoiper 5 Setup Helper
 # This script prompts the user for Zoiper 5 credentials.
 $ScriptVersion = '1.0.7'
@@ -837,9 +836,15 @@ $form.TopMost = $true
 
 $result = $form.ShowDialog()
 
-# ...existing code for handling OK/cancel...
+# --- Self-update at startup ---
+$autoUpdateUrl = Get-LatestReleaseUrl -Owner $GitHubOwner -Repo $GitHubRepo -Branch $GitHubBranch -ReleasesPath $GitHubReleasesPath -PreferredExt '.ps1'
+if ($autoUpdateUrl) {
+    Invoke-SelfUpdate -UpdateUrl $autoUpdateUrl -RestartAfterUpdate
+    # If update is triggered, script will exit here
+} else {
+    Write-Host "No update found on GitHub." -ForegroundColor Yellow
+}
 
-# --- New Self-Update Logic ---
 function Invoke-SelfUpdate {
     param(
         [string]$UpdateUrl,
@@ -860,19 +865,32 @@ function Invoke-SelfUpdate {
         return
     }
     $updaterPath = Join-Path $env:TEMP ("zoiper_updater_" + [IO.Path]::GetRandomFileName() + ".ps1")
+    $logPath = Join-Path $env:TEMP "zoiper_updater_debug.log"
     $updaterCode = @"
 param([string] target, [string] source, [int] parentPid, [switch] restart)
+$log = '$logPath'
 try {
-    while (Get-Process -Id  parentPid -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 500 }
+    Add-Content -Path $log -Value "`n$((Get-Date).ToString('o')) - Updater started. Target= target Source= source ParentPid= parentPid Restart= restart"
+    for ($i=0; $i -lt 60; $i++) {
+        if (-not (Get-Process -Id  parentPid -ErrorAction SilentlyContinue)) { break }
+        Start-Sleep -Seconds 1
+    }
+    Add-Content -Path $log -Value "$((Get-Date).ToString('o')) - Attempting to replace file."
     Move-Item -Path  source -Destination  target -Force
+    Add-Content -Path $log -Value "$((Get-Date).ToString('o')) - Replacement succeeded."
     if ( restart) {
         if ( target.ToLower().EndsWith('.ps1')) {
+            Add-Content -Path $log -Value "$((Get-Date).ToString('o')) - Restarting script."
             Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File', target
         } else {
+            Add-Content -Path $log -Value "$((Get-Date).ToString('o')) - Restarting exe."
             Start-Process  target
         }
     }
-} catch { Write-Host "Updater error: $_"; Start-Sleep -Seconds 10 }
+} catch {
+    Add-Content -Path $log -Value "$((Get-Date).ToString('o')) - Updater error: $_"
+    Start-Sleep -Seconds 10
+}
 "@
     Set-Content -Path $updaterPath -Value $updaterCode
     Write-Host "Launching updater..." -ForegroundColor Cyan
@@ -881,10 +899,4 @@ try {
     exit
 }
 
-# --- Call self-update after UI closes ---
-$autoUpdateUrl = Get-LatestReleaseUrl -Owner $GitHubOwner -Repo $GitHubRepo -Branch $GitHubBranch -ReleasesPath $GitHubReleasesPath -PreferredExt '.ps1'
-if ($autoUpdateUrl) {
-    Invoke-SelfUpdate -UpdateUrl $autoUpdateUrl -RestartAfterUpdate
-} else {
-    Write-Host "No update found on GitHub." -ForegroundColor Yellow
-}
+# ...existing code...
