@@ -88,12 +88,31 @@ function Invoke-BatchUpdater {
     if (-not $UpdateUrl -or -not $TargetPath) { return }
 
     $batchPath = Join-Path $env:TEMP ("zoiper_update_" + [IO.Path]::GetRandomFileName() + ".bat")
-    $downloadPath = Join-Path $env:TEMP ("zoiper_new_" + [IO.Path]::GetRandomFileName() + ".ps1")
+    $targetExt = [IO.Path]::GetExtension($TargetPath)
+    if ([string]::IsNullOrWhiteSpace($targetExt)) { $targetExt = '.ps1' }
+    $downloadPath = Join-Path $env:TEMP ("zoiper_new_" + [IO.Path]::GetRandomFileName() + $targetExt)
 
     $batchContent = @"
 @echo off
 setlocal
-powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Invoke-WebRequest -Uri `"$UpdateUrl`" -OutFile `"$downloadPath`" -UseBasicParsing -ErrorAction Stop; Wait-Process -Id $ParentPid -ErrorAction SilentlyContinue; Move-Item -Path `"$downloadPath`" -Destination `"$TargetPath`" -Force; Start-Process -FilePath `"powershell.exe`" -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',`"$TargetPath`"; } catch { exit 1 }"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try {
+    # Wait briefly for parent to exit if still running
+    for($i=0;$i -lt 20;$i++){ try { if(Get-Process -Id $ParentPid -ErrorAction SilentlyContinue){ Start-Sleep -Milliseconds 400 } else { break } } catch { break } }
+
+    # Download with retries
+    for($i=0;$i -lt 10;$i++){
+        try { Invoke-WebRequest -Uri `"$UpdateUrl`" -OutFile `"$downloadPath`" -UseBasicParsing -ErrorAction Stop; break }
+        catch { if($i -ge 9){ throw } Start-Sleep -Milliseconds 500 }
+    }
+
+    # Replace target with retries
+    for($i=0;$i -lt 20;$i++){
+        try { Copy-Item -Path `"$downloadPath`" -Destination `"$TargetPath`" -Force -ErrorAction Stop; $ok=$true; break }
+        catch { if($i -ge 19){ throw } Start-Sleep -Milliseconds 500 }
+    }
+
+    Start-Process -FilePath `"powershell.exe`" -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',`"$TargetPath`"
+} catch { exit 1 }"
 endlocal
 "@
 
