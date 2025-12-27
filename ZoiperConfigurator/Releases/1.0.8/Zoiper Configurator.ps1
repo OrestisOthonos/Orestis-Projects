@@ -110,8 +110,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "try {
         try { Copy-Item -Path `"$downloadPath`" -Destination `"$TargetPath`" -Force -ErrorAction Stop; $ok=$true; break }
         catch { if($i -ge 19){ throw } Start-Sleep -Milliseconds 500 }
     }
-
-    Start-Process -FilePath `"powershell.exe`" -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',`"$TargetPath`"
 } catch { exit 1 }"
 endlocal
 "@
