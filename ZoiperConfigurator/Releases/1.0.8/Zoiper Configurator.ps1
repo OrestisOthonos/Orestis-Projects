@@ -730,7 +730,7 @@ $textBoxPassword = New-Object System.Windows.Forms.TextBox
 $textBoxPassword.Location = New-Object System.Drawing.Point(25, 175)
 $textBoxPassword.Size = New-Object System.Drawing.Size(320, 26)
 $textBoxPassword.Font = New-Object System.Drawing.Font("Segoe UI", 10)
-$textBoxPassword.PasswordChar = "●"
+$textBoxPassword.PasswordChar = '*'
 $tabConfig.Controls.Add($textBoxPassword)
 
 # Tab 2: About
@@ -764,7 +764,8 @@ $updateButton.Add_Click({
             $updateResult = Invoke-SelfUpdate -UpdateUrl $ScriptUpdateConfig.UpdateUrl
         }
         elseif ($ScriptUpdateConfig.GitHubOwner -and $ScriptUpdateConfig.GitHubRepo) {
-            $updateResult = Invoke-PublicUpdate -Owner $ScriptUpdateConfig.GitHubOwner -Repo $ScriptUpdateConfig.GitHubRepo -Branch $ScriptUpdateConfig.GitHubBranch -Path $ScriptUpdateConfig.GitHubPath
+            [System.Windows.Forms.MessageBox]::Show("Update via GitHub is not supported in this version.", "Update Check", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            return
         }
         else {
             [System.Windows.Forms.MessageBox]::Show("No update source configured.", "Update Check", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
@@ -792,7 +793,8 @@ $updateButton.Add_Click({
                     $forceResult = Invoke-SelfUpdate -UpdateUrl $ScriptUpdateConfig.UpdateUrl -Force
                 }
                 else {
-                    $forceResult = Invoke-PublicUpdate -Owner $ScriptUpdateConfig.GitHubOwner -Repo $ScriptUpdateConfig.GitHubRepo -Branch $ScriptUpdateConfig.GitHubBranch -Path $ScriptUpdateConfig.GitHubPath -Force
+                    [System.Windows.Forms.MessageBox]::Show("Update via GitHub is not supported in this version.", "Update Check", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+                    return
                 }
 
                 if ($forceResult -and $forceResult.RebootRequired) {
