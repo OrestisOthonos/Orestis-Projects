@@ -1,27 +1,12 @@
+
 # Zoiper 5 Setup Helper
 # This script prompts the user for Zoiper 5 credentials.
 $ScriptVersion = '1.0.8'
 
 # --- Self-update configuration ---
-# Set `UpdateUrl` to your public release download URL or leave empty and use the
-# authenticated update function below for private releases.
-$ScriptUpdateConfig = @{ 
-    # Example public releases URL:
-    # 'https://github.com/OWNER/REPO/releases/latest/download/ZoiperConfigurator.exe'
-    UpdateUrl    = '' 
-    
-    # Public GitHub Repo Configuration
-    GitHubOwner  = 'OrestisOthonos' 
-    GitHubRepo   = 'Orestis-Projects' 
-    GitHubBranch = 'main'
-    # Path to the releases folder in the repo
-    GitHubPath   = 'ZoiperConfigurator/Releases'
-    
-    AutoCheck    = $true # Set to $true to check for updates automatically on start
-}
+# Set this to your update URL (raw .ps1 or .exe in your repo or web server)
+$UpdateUrl = '' # e.g. 'https://github.com/OWNER/REPO/releases/latest/download/ZoiperConfigurator.ps1'
 
-# Capture original command line arguments for relaunch after update
-$global:OriginalArgs = $args.Clone()
 
 function Get-CurrentScriptPath {
     # Try $PSCommandPath first (works for .ps1 scripts)
@@ -558,24 +543,6 @@ try {
     return [PSCustomObject]@{ Status = 'NoUpdate'; RebootRequired = $false }
 }
 
-# Auto-check for updates after all functions are defined
-if ($ScriptUpdateConfig.AutoCheck -eq $true) {
-    Write-Host "Checking for updates..." -ForegroundColor Cyan
-    if ($ScriptUpdateConfig.UpdateUrl) {
-        Invoke-SelfUpdate -UpdateUrl $ScriptUpdateConfig.UpdateUrl
-    }
-    elseif ($ScriptUpdateConfig.GitHubOwner -and $ScriptUpdateConfig.GitHubRepo) {
-        # Note: If an update happens here, script will exit. 
-        # For auto-check, we usually want it to stay silent if failed.
-        try {
-            $result = Invoke-PublicUpdate -Owner $ScriptUpdateConfig.GitHubOwner -Repo $ScriptUpdateConfig.GitHubRepo -Branch $ScriptUpdateConfig.GitHubBranch -Path $ScriptUpdateConfig.GitHubPath
-            if ($result -and $result.RebootRequired) { exit }
-        }
-        catch {
-            Write-Host "Update check skipped: $($_.Exception.Message)" -ForegroundColor Gray
-        }
-    }
-}
 
 Write-Host "Starting Zoiper 5 Setup..." -ForegroundColor Cyan
 
@@ -837,16 +804,51 @@ $form.TopMost = $true
 
 $result = $form.ShowDialog()
 
-# Handle update-triggered exit
-if ($result -eq [System.Windows.Forms.DialogResult]::Abort) {
-    Write-Host "Update in progress. Exiting to allow file replacement..." -ForegroundColor Yellow
+# ...existing code for handling OK/cancel...
+
+# --- New Self-Update Logic ---
+function Invoke-SelfUpdate {
+    param(
+        [string]$UpdateUrl,
+        [switch]$RestartAfterUpdate
+    )
+    if (-not $UpdateUrl) {
+        Write-Host "No update URL configured." -ForegroundColor Yellow
+        return
+    }
+    $scriptPath = $MyInvocation.MyCommand.Path
+    $isExe = $scriptPath.ToLower().EndsWith('.exe')
+    $tempUpdate = Join-Path $env:TEMP ("zoiper_update_" + [IO.Path]::GetRandomFileName() + $(if ($isExe) {'.exe'} else {'.ps1'}))
+    try {
+        Write-Host "Downloading update..." -ForegroundColor Cyan
+        Invoke-WebRequest -Uri $UpdateUrl -OutFile $tempUpdate -UseBasicParsing -ErrorAction Stop
+    } catch {
+        Write-Host "Failed to download update: $_" -ForegroundColor Red
+        return
+    }
+    $updaterPath = Join-Path $env:TEMP ("zoiper_updater_" + [IO.Path]::GetRandomFileName() + ".ps1")
+    $updaterCode = @"
+param([string] target, [string] source, [int] parentPid, [switch] restart)
+try {
+    while (Get-Process -Id  parentPid -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 500 }
+    Move-Item -Path  source -Destination  target -Force
+    if ( restart) {
+        if ( target.ToLower().EndsWith('.ps1')) {
+            Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File', target
+        } else {
+            Start-Process  target
+        }
+    }
+} catch { Write-Host "Updater error: $_"; Start-Sleep -Seconds 10 }
+"@
+    Set-Content -Path $updaterPath -Value $updaterCode
+    Write-Host "Launching updater..." -ForegroundColor Cyan
+    Start-Process powershell -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-File",$updaterPath,"-target",$scriptPath,"-source",$tempUpdate,"-parentPid",$PID,$(if ($RestartAfterUpdate) {'-restart'} else {''})
+    Write-Host "Exiting for update..." -ForegroundColor Yellow
     exit
 }
 
-# ...existing code for handling OK/cancel...
-
-# After the main UI closes, check for updates and exit if needed
-if ($ScriptUpdateConfig.GitHubOwner -and $ScriptUpdateConfig.GitHubRepo) {
-    $updateResult = Invoke-PublicUpdate -Owner $ScriptUpdateConfig.GitHubOwner -Repo $ScriptUpdateConfig.GitHubRepo -Branch $ScriptUpdateConfig.GitHubBranch -Path $ScriptUpdateConfig.GitHubPath
-    if ($updateResult -and $updateResult.RebootRequired) { exit }
+# --- Call self-update after UI closes ---
+if ($UpdateUrl) {
+    Invoke-SelfUpdate -UpdateUrl $UpdateUrl -RestartAfterUpdate
 }
