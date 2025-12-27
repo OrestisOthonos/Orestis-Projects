@@ -77,80 +77,76 @@ function Get-VersionFromFile($path) {
     return "0.0.0"
 }
 
-function Invoke-SelfUpdate {
+function Invoke-BatchUpdater {
     param(
         [string]$UpdateUrl,
-        [switch]$Force
+        [version]$RemoteVersion,
+        [string]$TargetPath,
+        [int]$ParentPid
     )
 
-    if (-not $UpdateUrl) { Write-Verbose "No UpdateUrl configured."; return [PSCustomObject]@{ Status = 'NoUpdate'; RebootRequired = $false } }
+    if (-not $UpdateUrl -or -not $TargetPath) { return }
 
-    $proc = [System.Diagnostics.Process]::GetCurrentProcess()
-    $currentProcessPath = $proc.MainModule.FileName
-    $isExeRun = $currentProcessPath -and ($currentProcessPath.ToLower().EndsWith('.exe'))
+    $batchPath = Join-Path $env:TEMP ("zoiper_update_" + [IO.Path]::GetRandomFileName() + ".bat")
+    $downloadPath = Join-Path $env:TEMP ("zoiper_new_" + [IO.Path]::GetRandomFileName() + ".ps1")
 
-    $targetPath = if ($isExeRun) { $currentProcessPath } else { Get-CurrentScriptPath }
-    if (-not $targetPath) { Write-Warning "Cannot determine current script path. Self-update aborted."; return [PSCustomObject]@{ Status = 'NoUpdate'; RebootRequired = $false } }
+    $batchContent = @"
+@echo off
+setlocal
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Invoke-WebRequest -Uri '$UpdateUrl' -OutFile '$downloadPath' -UseBasicParsing -ErrorAction Stop; Wait-Process -Id $ParentPid -ErrorAction SilentlyContinue; Move-Item -Path '$downloadPath' -Destination '$TargetPath' -Force; Start-Process -FilePath 'powershell.exe' -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','$TargetPath'; } catch { exit 1 }"
+endlocal
+"@
 
-    $ext = if ($UpdateUrl.ToLower().EndsWith('.exe') -or $isExeRun) { '.exe' } else { '.ps1' }
-    $temp = Join-Path $env:TEMP ([IO.Path]::GetRandomFileName() + $ext)
+    Set-Content -Path $batchPath -Value $batchContent -Encoding ASCII
+    Start-Process -FilePath $batchPath -WindowStyle Hidden
+}
 
+function Invoke-UpdateCheck {
+    param([switch]$SilentIfLatest)
+
+    $latestUrl = Get-LatestReleaseUrl -Owner $GitHubOwner -Repo $GitHubRepo -Branch $GitHubBranch -ReleasesPath $GitHubReleasesPath -PreferredExt '.ps1'
+    if (-not $latestUrl) {
+        if (-not $SilentIfLatest) {
+            Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+            [System.Windows.Forms.MessageBox]::Show("Could not determine the latest release.", "Update Check", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+        }
+        return 'NoUpdate'
+    }
+
+    $checkTemp = Join-Path $env:TEMP ("zoiper_ver_" + [IO.Path]::GetRandomFileName() + ".ps1")
+    $remoteVersion = $null
     try {
-        Invoke-WebRequest -Uri $UpdateUrl -OutFile $temp -UseBasicParsing -ErrorAction Stop
+        Invoke-WebRequest -Uri $latestUrl -OutFile $checkTemp -UseBasicParsing -ErrorAction Stop
+        $remoteVersion = Get-VersionFromFile $checkTemp
     }
     catch {
-        Write-Warning "Failed to download update from $($UpdateUrl): $_"
-        return [PSCustomObject]@{ Status = 'DownloadFailed'; RebootRequired = $false }
+        if (-not $SilentIfLatest) {
+            Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+            [System.Windows.Forms.MessageBox]::Show("Could not download the latest version.", "Update Check", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+        }
+        return 'NoUpdate'
     }
+    finally { try { Remove-Item -Path $checkTemp -ErrorAction SilentlyContinue } catch { } }
 
-    $localVersion = $ScriptVersion
-    $remoteVersion = Get-VersionFromFile $temp
-
-    Write-Host "Local Version:  $localVersion" -ForegroundColor Gray
-    Write-Host "Remote Version: $remoteVersion" -ForegroundColor Gray
-
-    $isNewer = $false
-    if ($remoteVersion -and $localVersion) { $isNewer = [version]$remoteVersion -gt [version]$localVersion }
-
-    if (-not $isNewer -and -not $Force) {
-        try { Remove-Item -Path $temp -ErrorAction SilentlyContinue } catch { }
-        return [PSCustomObject]@{ Status = 'NoUpdate'; RebootRequired = $false }
+    if (-not $remoteVersion -or ([version]$remoteVersion -le [version]$ScriptVersion)) {
+        if (-not $SilentIfLatest) {
+            Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+            [System.Windows.Forms.MessageBox]::Show("You are already on the latest version.", "Update Check", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+        }
+        return 'NoUpdate'
     }
-
-    if ($Force -and -not $isNewer) { Write-Host "Forcing re-installation..." -ForegroundColor Yellow }
-    else { Write-Host "Update found ($remoteVersion) — installing..." -ForegroundColor Cyan }
 
     Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
-    $msg = "A new version ($remoteVersion) has been downloaded and is ready to be installed.`n`nPlease close the Zoiper Configurator and then click OK to complete installation. You will need to relaunch the application manually after installation."
-    [System.Windows.Forms.MessageBox]::Show($msg, "Update Ready", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
-
-    $backup = "$targetPath.old"
-    try {
-        if (Test-Path -Path $targetPath) { Move-Item -Path $targetPath -Destination $backup -Force -ErrorAction Stop }
-        Copy-Item -Path $temp -Destination $targetPath -Force -ErrorAction Stop
-        if (Test-Path -Path $backup) { Remove-Item -Path $backup -Force -ErrorAction SilentlyContinue }
-        return [PSCustomObject]@{ Status = 'Updated'; RebootRequired = $true }
-    }
-    catch {
-        [System.Windows.Forms.MessageBox]::Show("The update could not be installed automatically. Please close any running instances and copy the file:`n$temp`nto:`n$targetPath","Update Failed",[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
-        return [PSCustomObject]@{ Status = 'CopyFailed'; RebootRequired = $false }
-    }
-    finally {
-        try { Remove-Item -Path $temp -ErrorAction SilentlyContinue } catch { }
-    }
+    $targetPath = Get-CurrentScriptPath
+    $dialogText = "A new version ($remoteVersion) is available. Zoiper Configurator will close to update now."
+    [System.Windows.Forms.MessageBox]::Show($dialogText, "Update Available", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+    Invoke-BatchUpdater -UpdateUrl $latestUrl -RemoteVersion $remoteVersion -TargetPath $targetPath -ParentPid $PID
+    return 'Updating'
 }
 
- 
-# Central update configuration and auto-check
-$ScriptUpdateConfig = @{
-    AutoCheck = $true
-    UpdateUrl  = Get-LatestReleaseUrl -Owner $GitHubOwner -Repo $GitHubRepo -Branch $GitHubBranch -ReleasesPath $GitHubReleasesPath -PreferredExt '.ps1'
-}
-
-if ($ScriptUpdateConfig.AutoCheck -and $ScriptUpdateConfig.UpdateUrl) {
-    $autoUpdateResult = Invoke-SelfUpdate -UpdateUrl $ScriptUpdateConfig.UpdateUrl
-    if ($autoUpdateResult -and $autoUpdateResult.RebootRequired) { exit }
-}
+# Startup update check: compare versions and offload replacement to a batch file
+$startupUpdate = Invoke-UpdateCheck -SilentIfLatest
+if ($startupUpdate -eq 'Updating') { exit }
 
 Write-Host "Starting Zoiper 5 Setup..." -ForegroundColor Cyan
 
@@ -331,39 +327,8 @@ $updateButton.Size = New-Object System.Drawing.Size(150, 35)
 $tabAbout.Controls.Add($updateButton)
 
 $updateButton.Add_Click({
-    if (-not $ScriptUpdateConfig.UpdateUrl) {
-        [System.Windows.Forms.MessageBox]::Show("No update source configured.", "Update Check", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-        return
-    }
-
-    $updateResult = Invoke-SelfUpdate -UpdateUrl $ScriptUpdateConfig.UpdateUrl
-
-    if ($updateResult -and $updateResult.Status -in @('DownloadFailed','CopyFailed')) {
-        [System.Windows.Forms.MessageBox]::Show("The update could not be completed. Please try again later.", "Update Check", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
-        return
-    }
-
-    if ($updateResult -and $updateResult.RebootRequired) {
-        $form.DialogResult = [System.Windows.Forms.DialogResult]::Abort
-        return
-    }
-
-    if (-not $updateResult -or $updateResult.Status -eq 'NoUpdate') {
-        $msg = if (-not $updateResult) {
-            "Could not find a newer version. Would you like to force reinstall the current version?"
-        }
-        else {
-            "You are currently on the latest version. Would you like to force an update anyway?"
-        }
-
-        $res = [System.Windows.Forms.MessageBox]::Show($msg, "Update Check", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
-        if ($res -eq [System.Windows.Forms.DialogResult]::Yes) {
-            $forceResult = Invoke-SelfUpdate -UpdateUrl $ScriptUpdateConfig.UpdateUrl -Force
-            if ($forceResult -and $forceResult.RebootRequired) {
-                $form.DialogResult = [System.Windows.Forms.DialogResult]::Abort
-            }
-        }
-    }
+    $updateStatus = Invoke-UpdateCheck
+    if ($updateStatus -eq 'Updating') { $form.DialogResult = [System.Windows.Forms.DialogResult]::Abort }
 })
 
 # Separator line
