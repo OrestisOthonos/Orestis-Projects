@@ -31,24 +31,24 @@ if ($autoUpdateUrl) {
         $tempUpdate = Join-Path $env:TEMP ("zoiper_update_" + [IO.Path]::GetRandomFileName() + $(if ($isExe) {'.exe'} else {'.ps1'}))
         $updaterPath = Join-Path $env:TEMP ("zoiper_updater_" + [IO.Path]::GetRandomFileName() + ".ps1")
         $updaterCode = @"
-param([string]`target, [string]`updateUrl, [int]`parentPid)
+param([string]$target, [string]$updateUrl, [int]$parentPid)
 try {
     # Download update
-    Invoke-WebRequest -Uri `updateUrl -OutFile "_new" -UseBasicParsing -ErrorAction Stop
-    $newFile = Join-Path (Split-Path `target) "_new"
+    Invoke-WebRequest -Uri $updateUrl -OutFile "_new" -UseBasicParsing -ErrorAction Stop
+    $newFile = Join-Path (Split-Path $target) "_new"
     Move-Item -Path "_new" -Destination $newFile -Force
     # Close parent
-    try { Stop-Process -Id `parentPid -Force } catch { }
+    try { Stop-Process -Id $parentPid -Force } catch { }
     for ($i=0; $i -lt 10; $i++) {
-        if (-not (Get-Process -Id `parentPid -ErrorAction SilentlyContinue)) { break }
+        if (-not (Get-Process -Id $parentPid -ErrorAction SilentlyContinue)) { break }
         Start-Sleep -Seconds 1
     }
-    Move-Item -Path $newFile -Destination `target -Force
+    Move-Item -Path $newFile -Destination $target -Force
     # Relaunch
-    if (`target.ToLower().EndsWith('.ps1')) {
-        Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',`target
+    if ($target.ToLower().EndsWith('.ps1')) {
+        Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',$target
     } else {
-        Start-Process `target
+        Start-Process $target
     }
 } catch { }
 "@
