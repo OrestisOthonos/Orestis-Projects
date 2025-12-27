@@ -215,6 +215,9 @@ try { Remove-Item -Path $MyInvocation.MyCommand.Path -ErrorAction SilentlyContin
             "$(Get-Date -Format o) - Updater process started successfully" | Out-File -FilePath $prelog -Append -Encoding UTF8
         } catch {
             "$(Get-Date -Format o) - Failed to start updater process: $_" | Out-File -FilePath $prelog -Append -Encoding UTF8
+            Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+            $errorMsg = "Could not start the updater process.`n`nError: `n$($_)"
+            [System.Windows.Forms.MessageBox]::Show($errorMsg, "Update Failed", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
         }
 
         Write-Host "Update downloaded; returning to trigger graceful exit." -ForegroundColor Yellow
@@ -477,6 +480,11 @@ try {
         "$((Get-Date).ToString('o')) - Attempting to restore backup from $backupPath" | Out-File -FilePath $log -Append
         Move-Item -Path $backupPath -Destination $Target -Force -ErrorAction SilentlyContinue
     }
+
+    Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+    $errorMsg = "Failed to apply the update. Please ensure the application is closed and try again.`n`nError: `n$($_)`n`nLog file: `n$log"
+    [System.Windows.Forms.MessageBox]::Show($errorMsg, "Update Failed", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+    
     exit 1
 }
 
@@ -526,6 +534,9 @@ try { Remove-Item -Path $MyInvocation.MyCommand.Path -ErrorAction SilentlyContin
             "$(Get-Date -Format o) - Updater process started successfully" | Out-File -FilePath $prelog -Append -Encoding UTF8
         } catch {
             "$(Get-Date -Format o) - Failed to start updater process: $_" | Out-File -FilePath $prelog -Append -Encoding UTF8
+            Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+            $errorMsg = "Could not start the updater process.`n`nError: `n$($_)"
+            [System.Windows.Forms.MessageBox]::Show($errorMsg, "Update Failed", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
         }
 
         Write-Host "Update downloaded; returning to trigger graceful exit." -ForegroundColor Yellow
