@@ -93,7 +93,7 @@ function Invoke-BatchUpdater {
     $batchContent = @"
 @echo off
 setlocal
-powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Invoke-WebRequest -Uri '$UpdateUrl' -OutFile '$downloadPath' -UseBasicParsing -ErrorAction Stop; Wait-Process -Id $ParentPid -ErrorAction SilentlyContinue; Move-Item -Path '$downloadPath' -Destination '$TargetPath' -Force; Start-Process -FilePath 'powershell.exe' -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','$TargetPath'; } catch { exit 1 }"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Invoke-WebRequest -Uri `"$UpdateUrl`" -OutFile `"$downloadPath`" -UseBasicParsing -ErrorAction Stop; Wait-Process -Id $ParentPid -ErrorAction SilentlyContinue; Move-Item -Path `"$downloadPath`" -Destination `"$TargetPath`" -Force; Start-Process -FilePath `"powershell.exe`" -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',`"$TargetPath`"; } catch { exit 1 }"
 endlocal
 "@
 
@@ -102,7 +102,10 @@ endlocal
 }
 
 function Invoke-UpdateCheck {
-    param([switch]$SilentIfLatest)
+    param(
+        [switch]$SilentIfLatest,
+        [switch]$Force
+    )
 
     $latestUrl = Get-LatestReleaseUrl -Owner $GitHubOwner -Repo $GitHubRepo -Branch $GitHubBranch -ReleasesPath $GitHubReleasesPath -PreferredExt '.ps1'
     if (-not $latestUrl) {
@@ -128,17 +131,33 @@ function Invoke-UpdateCheck {
     }
     finally { try { Remove-Item -Path $checkTemp -ErrorAction SilentlyContinue } catch { } }
 
-    if (-not $remoteVersion -or ([version]$remoteVersion -le [version]$ScriptVersion)) {
-        if (-not $SilentIfLatest) {
-            Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
-            [System.Windows.Forms.MessageBox]::Show("You are already on the latest version.", "Update Check", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+    if (-not $Force) {
+        if (-not $remoteVersion -or ([version]$remoteVersion -le [version]$ScriptVersion)) {
+            if (-not $SilentIfLatest) {
+                Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+                [System.Windows.Forms.MessageBox]::Show("You are already on the latest version.", "Update Check", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+            }
+            return 'NoUpdate'
         }
-        return 'NoUpdate'
     }
 
     Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
     $targetPath = Get-CurrentScriptPath
-    $dialogText = "A new version ($remoteVersion) is available. Zoiper Configurator will close to update now."
+    $targetPath = Get-CurrentScriptPath
+    if (-not $targetPath) {
+        if (-not $SilentIfLatest) {
+            [System.Windows.Forms.MessageBox]::Show("Cannot determine the current script path. Update aborted.", "Update Check", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+        }
+        return 'NoUpdate'
+    }
+
+    $dialogText = if ($Force -and $remoteVersion) {
+        "Forcing reinstall of version $remoteVersion. Zoiper Configurator will close to update now."
+    } elseif ($remoteVersion) {
+        "A new version ($remoteVersion) is available. Zoiper Configurator will close to update now."
+    } else {
+        "An update will be applied. Zoiper Configurator will close to update now."
+    }
     [System.Windows.Forms.MessageBox]::Show($dialogText, "Update Available", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
     Invoke-BatchUpdater -UpdateUrl $latestUrl -RemoteVersion $remoteVersion -TargetPath $targetPath -ParentPid $PID
     return 'Updating'
@@ -328,7 +347,19 @@ $tabAbout.Controls.Add($updateButton)
 
 $updateButton.Add_Click({
     $updateStatus = Invoke-UpdateCheck
-    if ($updateStatus -eq 'Updating') { $form.DialogResult = [System.Windows.Forms.DialogResult]::Abort }
+    if ($updateStatus -eq 'Updating') { 
+        $form.DialogResult = [System.Windows.Forms.DialogResult]::Abort 
+        return
+    }
+
+    # Offer force reinstall when no newer version is found
+    if ($updateStatus -eq 'NoUpdate') {
+        $res = [System.Windows.Forms.MessageBox]::Show("No newer version found. Force reinstall the latest release anyway?", "Update Check", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
+        if ($res -eq [System.Windows.Forms.DialogResult]::Yes) {
+            $forceStatus = Invoke-UpdateCheck -Force
+            if ($forceStatus -eq 'Updating') { $form.DialogResult = [System.Windows.Forms.DialogResult]::Abort }
+        }
+    }
 })
 
 # Separator line
