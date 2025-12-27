@@ -422,6 +422,10 @@ function Invoke-PublicUpdate {
         if ($Force -and -not $isNewer) { Write-Host "Forcing re-installation..." -ForegroundColor Yellow }
         else { Write-Host "Update found ($remoteVersion) — installing..." -ForegroundColor Cyan }
 
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+        $msg = "A new version ($remoteVersion) has been downloaded.`n`nThe application will now close to apply the update. Please launch it again manually."
+        [System.Windows.Forms.MessageBox]::Show($msg, "Update Ready", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+
         $updaterPath = Join-Path $env:TEMP ("zoiper_updater_" + [IO.Path]::GetRandomFileName() + ".ps1")
         $parentPid = $PID
 
@@ -537,7 +541,7 @@ if ($ScriptUpdateConfig.AutoCheck -eq $true) {
         # Note: If an update happens here, script will exit. 
         # For auto-check, we usually want it to stay silent if failed.
         try {
-            $result = Invoke-PublicUpdate -Owner $ScriptUpdateConfig.GitHubOwner -Repo $ScriptUpdateConfig.GitHubRepo -Branch $ScriptUpdateConfig.GitHubBranch -Path $ScriptUpdateConfig.GitHubPath -RestartAfterUpdate
+            $result = Invoke-PublicUpdate -Owner $ScriptUpdateConfig.GitHubOwner -Repo $ScriptUpdateConfig.GitHubRepo -Branch $ScriptUpdateConfig.GitHubBranch -Path $ScriptUpdateConfig.GitHubPath
             if ($result -and $result.RebootRequired) { exit }
         }
         catch {
@@ -730,10 +734,10 @@ $tabAbout.Controls.Add($updateButton)
 $updateButton.Add_Click({
         $updateResult = $null
         if ($ScriptUpdateConfig.UpdateUrl) {
-            $updateResult = Invoke-SelfUpdate -UpdateUrl $ScriptUpdateConfig.UpdateUrl -RestartAfterUpdate
+            $updateResult = Invoke-SelfUpdate -UpdateUrl $ScriptUpdateConfig.UpdateUrl
         }
         elseif ($ScriptUpdateConfig.GitHubOwner -and $ScriptUpdateConfig.GitHubRepo) {
-            $updateResult = Invoke-PublicUpdate -Owner $ScriptUpdateConfig.GitHubOwner -Repo $ScriptUpdateConfig.GitHubRepo -Branch $ScriptUpdateConfig.GitHubBranch -Path $ScriptUpdateConfig.GitHubPath -RestartAfterUpdate
+            $updateResult = Invoke-PublicUpdate -Owner $ScriptUpdateConfig.GitHubOwner -Repo $ScriptUpdateConfig.GitHubRepo -Branch $ScriptUpdateConfig.GitHubBranch -Path $ScriptUpdateConfig.GitHubPath
         }
         else {
             [System.Windows.Forms.MessageBox]::Show("No update source configured.", "Update Check", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
@@ -758,10 +762,10 @@ $updateButton.Add_Click({
             if ($res -eq [System.Windows.Forms.DialogResult]::Yes) {
                 $forceResult = $null
                 if ($ScriptUpdateConfig.UpdateUrl) {
-                    $forceResult = Invoke-SelfUpdate -UpdateUrl $ScriptUpdateConfig.UpdateUrl -RestartAfterUpdate -Force
+                    $forceResult = Invoke-SelfUpdate -UpdateUrl $ScriptUpdateConfig.UpdateUrl -Force
                 }
                 else {
-                    $forceResult = Invoke-PublicUpdate -Owner $ScriptUpdateConfig.GitHubOwner -Repo $ScriptUpdateConfig.GitHubRepo -Branch $ScriptUpdateConfig.GitHubBranch -Path $ScriptUpdateConfig.GitHubPath -RestartAfterUpdate -Force
+                    $forceResult = Invoke-PublicUpdate -Owner $ScriptUpdateConfig.GitHubOwner -Repo $ScriptUpdateConfig.GitHubRepo -Branch $ScriptUpdateConfig.GitHubBranch -Path $ScriptUpdateConfig.GitHubPath -Force
                 }
 
                 if ($forceResult -and $forceResult.RebootRequired) {
