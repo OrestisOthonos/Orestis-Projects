@@ -558,7 +558,7 @@ try {
     return [PSCustomObject]@{ Status = 'NoUpdate'; RebootRequired = $false }
 }
 
-# Auto-check if configured
+# Auto-check for updates after all functions are defined
 if ($ScriptUpdateConfig.AutoCheck -eq $true) {
     Write-Host "Checking for updates..." -ForegroundColor Cyan
     if ($ScriptUpdateConfig.UpdateUrl) {
