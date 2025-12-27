@@ -1,6 +1,6 @@
 # Zoiper 5 Setup Helper
 # This script prompts the user for Zoiper 5 credentials.
-$ScriptVersion = '1.0.6'
+$ScriptVersion = '1.0.7'
 
 # --- Self-update configuration ---
 # Set `UpdateUrl` to your public release download URL or leave empty and use the
