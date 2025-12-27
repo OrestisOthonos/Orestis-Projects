@@ -839,64 +839,47 @@ $result = $form.ShowDialog()
 # --- Self-update at startup ---
 $autoUpdateUrl = Get-LatestReleaseUrl -Owner $GitHubOwner -Repo $GitHubRepo -Branch $GitHubBranch -ReleasesPath $GitHubReleasesPath -PreferredExt '.ps1'
 if ($autoUpdateUrl) {
-    Invoke-SelfUpdate -UpdateUrl $autoUpdateUrl -RestartAfterUpdate
-    # If update is triggered, script will exit here
-} else {
-    Write-Host "No update found on GitHub." -ForegroundColor Yellow
-}
-
-function Invoke-SelfUpdate {
-    param(
-        [string]$UpdateUrl,
-        [switch]$RestartAfterUpdate
-    )
-    if (-not $UpdateUrl) {
-        Write-Host "No update URL configured." -ForegroundColor Yellow
-        return
-    }
-    $scriptPath = $MyInvocation.MyCommand.Path
-    $isExe = $scriptPath.ToLower().EndsWith('.exe')
-    $tempUpdate = Join-Path $env:TEMP ("zoiper_update_" + [IO.Path]::GetRandomFileName() + $(if ($isExe) {'.exe'} else {'.ps1'}))
-    try {
-        Write-Host "Downloading update..." -ForegroundColor Cyan
-        Invoke-WebRequest -Uri $UpdateUrl -OutFile $tempUpdate -UseBasicParsing -ErrorAction Stop
-    } catch {
-        Write-Host "Failed to download update: $_" -ForegroundColor Red
-        return
-    }
-    $updaterPath = Join-Path $env:TEMP ("zoiper_updater_" + [IO.Path]::GetRandomFileName() + ".ps1")
-    $logPath = Join-Path $env:TEMP "zoiper_updater_debug.log"
-    $updaterCode = @"
-param([string] target, [string] source, [int] parentPid, [switch] restart)
-$log = '$logPath'
+    $localVersion = $ScriptVersion
+    $remoteVersion = try {
+        $tempVerFile = Join-Path $env:TEMP ("zoiper_update_ver_" + [IO.Path]::GetRandomFileName() + ".ps1")
+        Invoke-WebRequest -Uri $autoUpdateUrl -OutFile $tempVerFile -UseBasicParsing -ErrorAction Stop
+        $ver = (Select-String -Path $tempVerFile -Pattern "\$ScriptVersion = '([0-9.]+)'" | ForEach-Object { $_.Matches[0].Groups[1].Value })
+        Remove-Item $tempVerFile -Force -ErrorAction SilentlyContinue
+        $ver
+    } catch { $null }
+    if ($remoteVersion -and ([version]$remoteVersion -gt [version]$localVersion)) {
+        # Show update found dialog
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+        [System.Windows.Forms.MessageBox]::Show("A new version ($remoteVersion) was found. The Zoiper Configurator will close and update. Please relaunch it from the same location after the update.", "Update Available", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+        # Start updater script
+        $scriptPath = $MyInvocation.MyCommand.Path
+        $isExe = $scriptPath.ToLower().EndsWith('.exe')
+        $tempUpdate = Join-Path $env:TEMP ("zoiper_update_" + [IO.Path]::GetRandomFileName() + $(if ($isExe) {'.exe'} else {'.ps1'}))
+        $updaterPath = Join-Path $env:TEMP ("zoiper_updater_" + [IO.Path]::GetRandomFileName() + ".ps1")
+        $updaterCode = @"
+param([string] target, [string] updateUrl, [int] parentPid)
 try {
-    Add-Content -Path $log -Value "`n$((Get-Date).ToString('o')) - Updater started. Target= target Source= source ParentPid= parentPid Restart= restart"
-    for ($i=0; $i -lt 60; $i++) {
+    # Download update
+    Invoke-WebRequest -Uri  updateUrl -OutFile "_new" -UseBasicParsing -ErrorAction Stop
+    $newFile = Join-Path (Split-Path  target) "_new"
+    Move-Item -Path "_new" -Destination $newFile -Force
+    # Close parent
+    try { Stop-Process -Id  parentPid -Force } catch { }
+    for ($i=0; $i -lt 10; $i++) {
         if (-not (Get-Process -Id  parentPid -ErrorAction SilentlyContinue)) { break }
         Start-Sleep -Seconds 1
     }
-    Add-Content -Path $log -Value "$((Get-Date).ToString('o')) - Attempting to replace file."
-    Move-Item -Path  source -Destination  target -Force
-    Add-Content -Path $log -Value "$((Get-Date).ToString('o')) - Replacement succeeded."
-    if ( restart) {
-        if ( target.ToLower().EndsWith('.ps1')) {
-            Add-Content -Path $log -Value "$((Get-Date).ToString('o')) - Restarting script."
-            Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File', target
-        } else {
-            Add-Content -Path $log -Value "$((Get-Date).ToString('o')) - Restarting exe."
-            Start-Process  target
-        }
+    Move-Item -Path $newFile -Destination  target -Force
+    # Relaunch
+    if ( target.ToLower().EndsWith('.ps1')) {
+        Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File', target
+    } else {
+        Start-Process  target
     }
-} catch {
-    Add-Content -Path $log -Value "$((Get-Date).ToString('o')) - Updater error: $_"
-    Start-Sleep -Seconds 10
-}
+} catch { }
 "@
-    Set-Content -Path $updaterPath -Value $updaterCode
-    Write-Host "Launching updater..." -ForegroundColor Cyan
-    Start-Process powershell -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-File",$updaterPath,"-target",$scriptPath,"-source",$tempUpdate,"-parentPid",$PID,$(if ($RestartAfterUpdate) {'-restart'} else {''})
-    Write-Host "Exiting for update..." -ForegroundColor Yellow
-    exit
+        Set-Content -Path $updaterPath -Value $updaterCode
+        Start-Process powershell -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-File",$updaterPath,"-target",$scriptPath,"-updateUrl",$autoUpdateUrl,"-parentPid",$PID
+        exit
+    }
 }
-
-# ...existing code...
