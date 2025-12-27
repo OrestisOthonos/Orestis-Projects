@@ -3,9 +3,42 @@
 # This script prompts the user for Zoiper 5 credentials.
 $ScriptVersion = '1.0.8'
 
+
 # --- Self-update configuration ---
-# Set this to your update URL (raw .ps1 or .exe in your repo or web server)
-$UpdateUrl = '' # e.g. 'https://github.com/OWNER/REPO/releases/latest/download/ZoiperConfigurator.ps1'
+# GitHub repo info for update discovery
+$GitHubOwner = 'OrestisOthonos'
+$GitHubRepo = 'Orestis-Projects'
+$GitHubBranch = 'main'
+$GitHubReleasesPath = 'ZoiperConfigurator/Releases'
+
+function Get-LatestReleaseUrl {
+    param(
+        [string]$Owner,
+        [string]$Repo,
+        [string]$Branch,
+        [string]$ReleasesPath,
+        [string]$PreferredExt = '.ps1'
+    )
+    $headers = @{ 'User-Agent' = 'ZoiperUpdater'; Accept = 'application/vnd.github.v3+json' }
+    try {
+        $segments = $ReleasesPath.Split('/') | ForEach-Object { [Uri]::EscapeDataString($_) }
+        $encodedPath = $segments -join '/'
+        $uri = "https://api.github.com/repos/$Owner/$Repo/contents/$encodedPath"
+        $items = Invoke-RestMethod -Uri $uri -Headers $headers -ErrorAction Stop
+        $versionFolders = $items | Where-Object { $_.type -eq 'dir' -and $_.name -match '^[\d\.]+$' }
+        $latestFolder = $versionFolders | ForEach-Object { [PSCustomObject]@{ Folder = $_.name; Version = [version]$_.name } } | Sort-Object Version -Descending | Select-Object -First 1
+        if (-not $latestFolder) { return $null }
+        $folderUri = "https://api.github.com/repos/$Owner/$Repo/contents/$encodedPath/$($latestFolder.Folder)"
+        $folderItems = Invoke-RestMethod -Uri $folderUri -Headers $headers -ErrorAction Stop
+        $asset = $folderItems | Where-Object { $_.name -like "Zoiper Configurator*" -and $_.name -like "*${PreferredExt}" } | Select-Object -First 1
+        if ($asset) {
+            return "https://raw.githubusercontent.com/$Owner/$Repo/$Branch/$ReleasesPath/$($latestFolder.Folder)/$($asset.name)"
+        }
+    } catch {
+        Write-Host "Failed to discover latest release: $_" -ForegroundColor Yellow
+    }
+    return $null
+}
 
 
 function Get-CurrentScriptPath {
@@ -849,6 +882,9 @@ try {
 }
 
 # --- Call self-update after UI closes ---
-if ($UpdateUrl) {
-    Invoke-SelfUpdate -UpdateUrl $UpdateUrl -RestartAfterUpdate
+$autoUpdateUrl = Get-LatestReleaseUrl -Owner $GitHubOwner -Repo $GitHubRepo -Branch $GitHubBranch -ReleasesPath $GitHubReleasesPath -PreferredExt '.ps1'
+if ($autoUpdateUrl) {
+    Invoke-SelfUpdate -UpdateUrl $autoUpdateUrl -RestartAfterUpdate
+} else {
+    Write-Host "No update found on GitHub." -ForegroundColor Yellow
 }
