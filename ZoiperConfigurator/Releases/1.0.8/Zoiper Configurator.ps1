@@ -1,7 +1,7 @@
 # Zoiper 5 Setup Helper
 # This script prompts the user for Zoiper 5 credentials.
 
-$ScriptVersion = '1.0.7'
+$ScriptVersion = '1.0.8'
 
 # --- Self-update configuration ---
 # GitHub repo info for update discovery
