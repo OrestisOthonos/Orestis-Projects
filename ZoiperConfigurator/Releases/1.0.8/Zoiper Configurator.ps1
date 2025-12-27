@@ -1,7 +1,7 @@
 # Zoiper 5 Setup Helper
 # This script prompts the user for Zoiper 5 credentials.
 
-$ScriptVersion = '1.0.8'
+$ScriptVersion = '1.0.7'
 
 # --- Self-update configuration ---
 # GitHub repo info for update discovery
@@ -9,54 +9,6 @@ $GitHubOwner = 'OrestisOthonos'
 $GitHubRepo = 'Orestis-Projects'
 $GitHubBranch = 'main'
 $GitHubReleasesPath = 'ZoiperConfigurator/Releases'
-
-# --- Self-update at startup (moved to top) ---
-$autoUpdateUrl = Get-LatestReleaseUrl -Owner $GitHubOwner -Repo $GitHubRepo -Branch $GitHubBranch -ReleasesPath $GitHubReleasesPath -PreferredExt '.ps1'
-if ($autoUpdateUrl) {
-    $localVersion = $ScriptVersion
-    $remoteVersion = try {
-        $tempVerFile = Join-Path $env:TEMP ("zoiper_update_ver_" + [IO.Path]::GetRandomFileName() + ".ps1")
-        Invoke-WebRequest -Uri $autoUpdateUrl -OutFile $tempVerFile -UseBasicParsing -ErrorAction Stop
-        $ver = (Select-String -Path $tempVerFile -Pattern "\$ScriptVersion = '([0-9.]+)'" | ForEach-Object { $_.Matches[0].Groups[1].Value })
-        Remove-Item $tempVerFile -Force -ErrorAction SilentlyContinue
-        $ver
-    } catch { $null }
-    if ($remoteVersion -and ([version]$remoteVersion -gt [version]$localVersion)) {
-        # Show update found dialog
-        Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
-        [System.Windows.Forms.MessageBox]::Show("A new version ($remoteVersion) was found. The Zoiper Configurator will close and update. Please relaunch it from the same location after the update.", "Update Available", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
-        # Start updater script
-        $scriptPath = $MyInvocation.MyCommand.Path
-        $isExe = $scriptPath.ToLower().EndsWith('.exe')
-        $tempUpdate = Join-Path $env:TEMP ("zoiper_update_" + [IO.Path]::GetRandomFileName() + $(if ($isExe) {'.exe'} else {'.ps1'}))
-        $updaterPath = Join-Path $env:TEMP ("zoiper_updater_" + [IO.Path]::GetRandomFileName() + ".ps1")
-        $updaterCode = @"
-param([string]$target, [string]$updateUrl, [int]$parentPid)
-try {
-    # Download update
-    Invoke-WebRequest -Uri $updateUrl -OutFile "_new" -UseBasicParsing -ErrorAction Stop
-    $newFile = Join-Path (Split-Path $target) "_new"
-    Move-Item -Path "_new" -Destination $newFile -Force
-    # Close parent
-    try { Stop-Process -Id $parentPid -Force } catch { }
-    for ($i=0; $i -lt 10; $i++) {
-        if (-not (Get-Process -Id $parentPid -ErrorAction SilentlyContinue)) { break }
-        Start-Sleep -Seconds 1
-    }
-    Move-Item -Path $newFile -Destination $target -Force
-    # Relaunch
-    if ($target.ToLower().EndsWith('.ps1')) {
-        Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',$target
-    } else {
-        Start-Process $target
-    }
-} catch { }
-"@
-        Set-Content -Path $updaterPath -Value $updaterCode
-        Start-Process powershell -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-File",$updaterPath,"-target",$scriptPath,"-updateUrl",$autoUpdateUrl,"-parentPid",$PID
-        exit
-    }
-}
 
 function Get-LatestReleaseUrl {
     param(
@@ -128,25 +80,19 @@ function Get-VersionFromFile($path) {
 function Invoke-SelfUpdate {
     param(
         [string]$UpdateUrl,
-        [switch]$RestartAfterUpdate,
         [switch]$Force
     )
 
-    if (-not $UpdateUrl) { Write-Verbose "No UpdateUrl configured."; return }
+    if (-not $UpdateUrl) { Write-Verbose "No UpdateUrl configured."; return [PSCustomObject]@{ Status = 'NoUpdate'; RebootRequired = $false } }
 
     $proc = [System.Diagnostics.Process]::GetCurrentProcess()
     $currentProcessPath = $proc.MainModule.FileName
     $isExeRun = $currentProcessPath -and ($currentProcessPath.ToLower().EndsWith('.exe'))
 
-    if ($isExeRun) { $targetPath = $currentProcessPath }
-    else {
-        $scriptPath = Get-CurrentScriptPath
-        if (-not $scriptPath) { Write-Warning "Cannot determine current script path. Self-update aborted."; return }
-        $targetPath = $scriptPath
-    }
+    $targetPath = if ($isExeRun) { $currentProcessPath } else { Get-CurrentScriptPath }
+    if (-not $targetPath) { Write-Warning "Cannot determine current script path. Self-update aborted."; return [PSCustomObject]@{ Status = 'NoUpdate'; RebootRequired = $false } }
 
-    $ext = '.ps1'
-    if ($UpdateUrl.ToLower().EndsWith('.exe') -or $isExeRun) { $ext = '.exe' }
+    $ext = if ($UpdateUrl.ToLower().EndsWith('.exe') -or $isExeRun) { '.exe' } else { '.ps1' }
     $temp = Join-Path $env:TEMP ([IO.Path]::GetRandomFileName() + $ext)
 
     try {
@@ -154,7 +100,7 @@ function Invoke-SelfUpdate {
     }
     catch {
         Write-Warning "Failed to download update from $($UpdateUrl): $_"
-        return
+        return [PSCustomObject]@{ Status = 'DownloadFailed'; RebootRequired = $false }
     }
 
     $localVersion = $ScriptVersion
@@ -166,468 +112,47 @@ function Invoke-SelfUpdate {
     $isNewer = $false
     if ($remoteVersion -and $localVersion) { $isNewer = [version]$remoteVersion -gt [version]$localVersion }
 
-    if ($isNewer -or $Force) {
-        if ($Force -and -not $isNewer) { Write-Host "Forcing re-installation..." -ForegroundColor Yellow }
-        else { Write-Host "Update found ($remoteVersion) — installing..." -ForegroundColor Cyan }
-
-        # Downloaded update; new flow: notify the user and attempt to install when they acknowledge.
-        $logDir = Join-Path $env:TEMP 'zoiper_logs'
-        try { [IO.Directory]::CreateDirectory($logDir) | Out-Null } catch { }
-        $prelog = Join-Path $logDir 'zoiper_updater_prelaunch.log'
-        "$(Get-Date -Format o) - Update ready at: $temp; Target=$targetPath; RemoteVersion=$remoteVersion" | Out-File -FilePath $prelog -Append -Encoding UTF8
-
-        Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
-        $msg = "A new version ($remoteVersion) has been downloaded and is ready to be installed.`n`nPlease close the Zoiper Configurator and then click OK to complete installation. You will need to relaunch the application manually after installation." 
-        [System.Windows.Forms.MessageBox]::Show($msg, "Update Ready", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
-
-        $backup = "$targetPath.old"
-        try {
-            if (Test-Path -Path $targetPath) { Move-Item -Path $targetPath -Destination $backup -Force -ErrorAction Stop }
-            Copy-Item -Path $temp -Destination $targetPath -Force -ErrorAction Stop
-            if (Test-Path -Path $backup) { Remove-Item -Path $backup -Force -ErrorAction SilentlyContinue }
-            "$(Get-Date -Format o) - Update installed to $targetPath" | Out-File -FilePath $prelog -Append -Encoding UTF8
-            try { Remove-Item -Path $temp -ErrorAction SilentlyContinue } catch { }
-            return [PSCustomObject]@{ Status = 'Updated'; RebootRequired = $true }
-        }
-        catch {
-            "$(Get-Date -Format o) - Failed to install update automatically: $_" | Out-File -FilePath $prelog -Append -Encoding UTF8
-            [System.Windows.Forms.MessageBox]::Show("The update could not be installed automatically. Please close any running instances and copy the file:`n$temp`nto:`n$targetPath","Update Failed",[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
-            return [PSCustomObject]@{ Status = 'Updated'; RebootRequired = $true }
-        }
-        $updaterPath = Join-Path $env:TEMP ("zoiper_updater_" + [IO.Path]::GetRandomFileName() + ".ps1")
-        $parentPid = $PID
-
-        $updaterScript = @'
-param(
-    [string]$Target,
-    [string]$Source,
-    [int]$ParentPid,
-    [switch]$Restart,
-    [string]$LogDirectory,
-    [string]$OriginalArgs
-)
-
-try { [IO.Directory]::CreateDirectory($LogDirectory) | Out-Null } catch { }
-$log = Join-Path $LogDirectory 'zoiper_updater_debug.log'
-"$((Get-Date).ToString('o')) - Updater started. Target=$Target Source=$Source ParentPid=$ParentPid Restart=$Restart OriginalArgs='$OriginalArgs'" | Out-File -FilePath $log -Append
-
-$maxWaitSeconds = 60
-$startTime = Get-Date
-while (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue) {
-    if ((Get-Date) - $startTime -gt [TimeSpan]::FromSeconds($maxWaitSeconds)) {
-        "$((Get-Date).ToString('o')) - Timeout waiting for parent PID $ParentPid after $maxWaitSeconds seconds; continuing with update." | Out-File -FilePath $log -Append
-        break
-    }
-    Start-Sleep -Milliseconds 300
-}
-
-try {
-    if (Test-Path -Path $Target) {
-        "$((Get-Date).ToString('o')) - Removing existing target: $Target" | Out-File -FilePath $log -Append
-        Remove-Item -Path $Target -Force -ErrorAction Stop
-    }
-} catch { "$((Get-Date).ToString('o')) - Error removing target: $_" | Out-File -FilePath $log -Append }
-
-try {
-    "$((Get-Date).ToString('o')) - Copying $Source -> $Target" | Out-File -FilePath $log -Append
-    Copy-Item -Path $Source -Destination $Target -Force
-    "$((Get-Date).ToString('o')) - Copy succeeded" | Out-File -FilePath $log -Append
-} catch { "$((Get-Date).ToString('o')) - Copy failed: $_" | Out-File -FilePath $log -Append; exit 1 }
-
-if ($Restart) {
-    try {
-        $originalArgsArray = if ($OriginalArgs) { $OriginalArgs -split ' ' } else { @() }
-        if ($Target.ToLower().EndsWith('.ps1')) {
-            "$((Get-Date).ToString('o')) - Starting PS with args: -File $Target $originalArgsArray" | Out-File -FilePath $log -Append
-            Start-Process -FilePath 'powershell.exe' -ArgumentList (@('-NoProfile','-ExecutionPolicy','Bypass','-File',$Target) + $originalArgsArray)
-        } else {
-            "$((Get-Date).ToString('o')) - Starting exe: $Target $originalArgsArray" | Out-File -FilePath $log -Append
-            Start-Process -FilePath $Target -ArgumentList $originalArgsArray
-        }
-        "$((Get-Date).ToString('o')) - Start-Process invoked successfully" | Out-File -FilePath $log -Append
-    } catch { "$((Get-Date).ToString('o')) - Failed to start process: $_" | Out-File -FilePath $log -Append }
-}
-
-try { Remove-Item -Path $Source -ErrorAction SilentlyContinue } catch { }
-Start-Sleep -Milliseconds 200
-try { Remove-Item -Path $MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue } catch { }
-'@
-
-        $updaterScript | Out-File -FilePath $updaterPath -Encoding UTF8
-
-        # Pre-launch debug info (written by the main process)
-        try {
-            $preLogDir = Join-Path $env:TEMP 'zoiper_logs'
-            try { [IO.Directory]::CreateDirectory($preLogDir) | Out-Null } catch { }
-            $prelog = Join-Path $preLogDir 'zoiper_updater_prelaunch.log'
-            "$(Get-Date -Format o) - Updater script written to: $updaterPath" | Out-File -FilePath $prelog -Append -Encoding UTF8
-            "$(Get-Date -Format o) - Updater script exists: $(Test-Path $updaterPath)" | Out-File -FilePath $prelog -Append -Encoding UTF8
-            "$(Get-Date -Format o) - Temp download path: $temp" | Out-File -FilePath $prelog -Append -Encoding UTF8
-        } catch { }
-
-        $processArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $updaterPath, '--', '-Target', $targetPath, '-Source', $temp, '-ParentPid', $parentPid)
-        if ($RestartAfterUpdate) { $processArgs += '-Restart' }
-        $logDir = Join-Path $env:TEMP 'zoiper_logs'
-        $processArgs += '-LogDirectory', $logDir
-        $originalArgsStr = $global:OriginalArgs -join ' '
-        if (-not [string]::IsNullOrWhiteSpace($originalArgsStr)) {
-            $processArgs += '-OriginalArgs', $originalArgsStr
-        }
-
-        try {
-            "$(Get-Date -Format o) - Starting updater process. Arg count: $($processArgs.Count). Args: $($processArgs -join ' ')" | Out-File -FilePath $prelog -Append -Encoding UTF8
-            Start-Process -FilePath 'powershell' -ArgumentList $processArgs -WindowStyle Hidden
-            "$(Get-Date -Format o) - Updater process started successfully" | Out-File -FilePath $prelog -Append -Encoding UTF8
-        } catch {
-            "$(Get-Date -Format o) - Failed to start updater process: $_" | Out-File -FilePath $prelog -Append -Encoding UTF8
-            Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
-            $errorMsg = "Could not start the updater process.`n`nError: `n$($_)"
-            [System.Windows.Forms.MessageBox]::Show($errorMsg, "Update Failed", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
-        }
-
-        Write-Host "Update downloaded; returning to trigger graceful exit." -ForegroundColor Yellow
-        return [PSCustomObject]@{ Status = 'Updated'; RebootRequired = $true }
-        $originalArgsStr = $global:OriginalArgs -join ' '
-        if (-not [string]::IsNullOrWhiteSpace($originalArgsStr)) {
-            $processArgs += '-OriginalArgs', $originalArgsStr
-        }
-
-        Start-Process -FilePath 'powershell' -ArgumentList $processArgs -WindowStyle Hidden
-
-        Write-Host "Update downloaded; returning to trigger graceful exit." -ForegroundColor Yellow
-        return [PSCustomObject]@{ Status = 'Updated'; RebootRequired = $true }
-    }
-    return [PSCustomObject]@{ Status = 'NoUpdate'; RebootRequired = $false }
-}
-
-# --- Helpers for private GitHub releases (PAT support) ---
-function Get-GitHubToken {
-    param(
-        [string]$VaultEntryName = 'GitHubPAT'
-    )
-
-    if ($env:GITHUB_PAT) { return $env:GITHUB_PAT }
-
-    if (Get-Command -Name Get-StoredCredential -ErrorAction SilentlyContinue) {
-        try {
-            $stored = Get-StoredCredential -Target $VaultEntryName -ErrorAction SilentlyContinue
-            if ($stored -and $stored.Password) { return $stored.Password }
-        }
-        catch { }
+    if (-not $isNewer -and -not $Force) {
+        try { Remove-Item -Path $temp -ErrorAction SilentlyContinue } catch { }
+        return [PSCustomObject]@{ Status = 'NoUpdate'; RebootRequired = $false }
     }
 
-    return $null
-}
+    if ($Force -and -not $isNewer) { Write-Host "Forcing re-installation..." -ForegroundColor Yellow }
+    else { Write-Host "Update found ($remoteVersion) — installing..." -ForegroundColor Cyan }
 
-# --- Public GitHub Download Functions ---
-
-function Get-PublicRepoContent {
-    param(
-        [string]$Owner,
-        [string]$Repo,
-        [string]$Branch,
-        [string]$Path,
-        [string]$OutFile
-    )
-    
-    # Use GitHub's raw content URL for public repos
-    $uri = "https://raw.githubusercontent.com/$Owner/$Repo/$Branch/$Path"
-    
-    Write-Host "Downloading: $Path..." -ForegroundColor Gray
-    Invoke-WebRequest -Uri $uri -OutFile $OutFile -UseBasicParsing -Method Get -ErrorAction Stop
-}
-
-function Get-LatestPublicGitHubPath {
-    param(
-        [string]$Owner,
-        [string]$Repo,
-        [string]$Branch,
-        [string]$BasePath,
-        [string]$PreferredExt = '.ps1'
-    )
-
-    $headers = @{ 'User-Agent' = 'ZoiperUpdater'; Accept = 'application/vnd.github.v3+json' }
-
-    try {
-        # List contents of the base path using GitHub API (works for public repos without auth)
-        $segments = $BasePath.Split('/') | ForEach-Object { [Uri]::EscapeDataString($_) }
-        $encodedPath = $segments -join '/'
-        $uri = "https://api.github.com/repos/$Owner/$Repo/contents/$encodedPath"
-        
-        $items = Invoke-RestMethod -Uri $uri -Headers $headers -ErrorAction Stop
-        
-        # Filter for folders that look like versions (e.g., 1.0, 1.0.1)
-        $versionFolders = $items | Where-Object { $_.type -eq 'dir' -and $_.name -match '^[\d\.]+$' }
-        if (-not $versionFolders) { return $null }
-
-        # Sort folders by version and pick the highest
-        $latestFolder = $versionFolders | ForEach-Object { 
-            try {
-                [PSCustomObject]@{ Folder = $_; Version = [version]$_.name }
-            }
-            catch {
-                # Skip folders that don't parse as valid versions
-                Write-Verbose "Skipping invalid version folder: $($_.name)"
-            }
-        } | Where-Object { $_.Version } | Sort-Object Version -Descending | Select-Object -First 1
-
-        if (-not $latestFolder) { return $null }
-
-        # Now list the contents of that specific version folder to find our script/exe
-        $folderUri = $latestFolder.Folder.url
-        $folderItems = Invoke-RestMethod -Uri $folderUri -Headers $headers -ErrorAction Stop
-        
-        # Look for matching assets (prefer the preferred extension)
-        $assets = $folderItems | Where-Object { $_.name -like "Zoiper Configurator.*" -or $_.name -like "ZoiperSetup.*" }
-        $asset = ($assets | Where-Object { $_.name -like "*$PreferredExt" } | Select-Object -First 1)
-        if (-not $asset) { $asset = $assets | Select-Object -First 1 }
-        
-        if ($asset) { return $asset.path }
-    }
-    catch {
-        # If API fails (rate limit, etc.), try a smart fallback
-        if ($_.Exception.Message -match '403|rate limit') {
-            Write-Host "GitHub API rate limit reached. Trying direct version checks..." -ForegroundColor Yellow
-            
-            # First, try the current version (for force reinstalls)
-            $currentVer = [version]$ScriptVersion
-            $currentPath = "$BasePath/$ScriptVersion/Zoiper Configurator$PreferredExt"
-            $currentUri = "https://raw.githubusercontent.com/$Owner/$Repo/$Branch/$currentPath"
-            
-            try {
-                $null = Invoke-WebRequest -Uri $currentUri -UseBasicParsing -ErrorAction Stop -TimeoutSec 3
-                Write-Host "Found current version $ScriptVersion (for reinstall)" -ForegroundColor Cyan
-                return $currentPath
-            }
-            catch {
-                # Current version not found, try next version
-            }
-            
-            # Try the next incremental version
-            $nextVer = "$($currentVer.Major).$($currentVer.Minor).$($currentVer.Build + 1)"
-            $testPath = "$BasePath/$nextVer/Zoiper Configurator$PreferredExt"
-            $testUri = "https://raw.githubusercontent.com/$Owner/$Repo/$Branch/$testPath"
-            
-            try {
-                $null = Invoke-WebRequest -Uri $testUri -UseBasicParsing -ErrorAction Stop -TimeoutSec 3
-                Write-Host "Found version $nextVer" -ForegroundColor Green
-                return $testPath
-            }
-            catch {
-                # Next version doesn't exist either
-            }
-        }
-        Write-Warning "Discovery failed: $($_.Exception.Message)"
-    }
-    return $null
-}
-
-function Invoke-PublicUpdate {
-    param(
-        [string]$Owner,
-        [string]$Repo,
-        [string]$Branch,
-        [string]$Path,
-        [switch]$RestartAfterUpdate,
-        [switch]$Force
-    )
-
-    # Determine if we're running as .ps1 or .exe by checking the actual script path
-    $scriptPath = Get-CurrentScriptPath
-    $isExeRun = $scriptPath -and ($scriptPath.ToLower().EndsWith('.exe'))
-
-    if ($isExeRun) { 
-        $targetPath = $scriptPath
-    }
-    else {
-        if (-not $scriptPath) { Write-Warning "Cannot determine current script path. Update aborted."; return }
-        $targetPath = $scriptPath
-    }
-
-    $ext = '.ps1'
-    if ($targetPath.ToLower().EndsWith('.exe')) { $ext = '.exe' }
-    $temp = Join-Path $env:TEMP ([IO.Path]::GetRandomFileName() + $ext)
-
-    try {
-        $discoveryPath = $Path
-        # If Path points to the releases root, try to discover the latest versioned folder
-        if ($Path -and $Path.EndsWith("Releases")) {
-            Write-Host "Searching for latest version on GitHub..." -ForegroundColor Gray
-            $discovered = Get-LatestPublicGitHubPath -Owner $Owner -Repo $Repo -Branch $Branch -BasePath $Path -PreferredExt $ext
-            if ($discovered) { 
-                $discoveryPath = $discovered 
-                Write-Host "Discovered path: $discoveryPath" -ForegroundColor Cyan
-            }
-            else {
-                Write-Warning "No version discovered, falling back to base path"
-            }
-        }
-
-        if ($discoveryPath) {
-            Write-Host "Attempting download from: $discoveryPath" -ForegroundColor Gray
-            Get-PublicRepoContent -Owner $Owner -Repo $Repo -Branch $Branch -Path $discoveryPath -OutFile $temp
-        }
-        else {
-            throw "No valid download path found"
-        }
-        Start-Sleep -Milliseconds 200
-    }
-    catch {
-        Write-Warning "Failed to download update: $_"
-        return
-    }
-
-    $localVersion = $ScriptVersion
-    $remoteVersion = Get-VersionFromFile $temp
-
-    Write-Host "Local Version:  $localVersion" -ForegroundColor Gray
-    Write-Host "Remote Version: $remoteVersion" -ForegroundColor Gray
-
-    $isNewer = $false
-    if ($remoteVersion -and $localVersion) { $isNewer = [version]$remoteVersion -gt [version]$localVersion }
-
-    if ($isNewer -or $Force) {
-        if ($Force -and -not $isNewer) { Write-Host "Forcing re-installation..." -ForegroundColor Yellow }
-        else { Write-Host "Update found ($remoteVersion) — installing..." -ForegroundColor Cyan }
-
-        Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
-        $msg = "A new version ($remoteVersion) has been downloaded.`n`nThe application will now close to apply the update. Please launch it again manually."
-        [System.Windows.Forms.MessageBox]::Show($msg, "Update Ready", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
-
-        $updaterPath = Join-Path $env:TEMP ("zoiper_updater_" + [IO.Path]::GetRandomFileName() + ".ps1")
-        $parentPid = $PID
-
-        $updaterScript = @'
-param(
-    [string]$Target,
-    [string]$Source,
-    [int]$ParentPid,
-    [switch]$Restart,
-    [string]$LogDirectory,
-    [string]$OriginalArgs
-)
-
-# Hardcoded log for top-level errors
-$ErrorLogPath = Join-Path $env:TEMP 'zoiper_updater_bootstrap_error.log'
-try {
-    try { [IO.Directory]::CreateDirectory($LogDirectory) | Out-Null } catch { }
-    $log = Join-Path $LogDirectory 'zoiper_updater_debug.log'
-    "$((Get-Date).ToString('o')) - Updater started. Target=$Target Source=$Source ParentPid=$ParentPid Restart=$Restart OriginalArgs='$OriginalArgs'" | Out-File -FilePath $log -Append
-
-    $maxWaitSeconds = 60
-    $startTime = Get-Date
-    while (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue) {
-        if ((Get-Date) - $startTime -gt [TimeSpan]::FromSeconds($maxWaitSeconds)) {
-            "$((Get-Date).ToString('o')) - Timeout waiting for parent PID $ParentPid after $maxWaitSeconds seconds; continuing with update." | Out-File -FilePath $log -Append
-            break
-        }
-        Start-Sleep -Milliseconds 300
-    }
-
-    $backupPath = "$Target.old"
-    try {
-        if (Test-Path -Path $Target) {
-            "$((Get-Date).ToString('o')) - Renaming target $Target to $backupPath" | Out-File -FilePath $log -Append
-            Move-Item -Path $Target -Destination $backupPath -Force -ErrorAction Stop
-        }
-
-        "$((Get-Date).ToString('o')) - Copying $Source -> $Target" | Out-File -FilePath $log -Append
-        Copy-Item -Path $Source -Destination $Target -Force -ErrorAction Stop
-        "$((Get-Date).ToString('o')) - Copy succeeded" | Out-File -FilePath $log -Append
-        
-        if (Test-Path -Path $backupPath) {
-            "$((Get-Date).ToString('o')) - Removing backup file $backupPath" | Out-File -FilePath $log -Append
-            Remove-Item -Path $backupPath -Force -ErrorAction SilentlyContinue
-        }
-
-        Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
-        [System.Windows.Forms.MessageBox]::Show("Zoiper Configurator has been updated successfully. You can now relaunch the application.", "Update Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
-    } catch {
-        "$((Get-Date).ToString('o')) - Update failed during file operations: $_" | Out-File -FilePath $log -Append
-        if (Test-Path -Path $backupPath) {
-            "$((Get-Date).ToString('o')) - Attempting to restore backup from $backupPath" | Out-File -FilePath $log -Append
-            Move-Item -Path $backupPath -Destination $Target -Force -ErrorAction SilentlyContinue
-        }
-
-        Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
-        $errorMsg = "Failed to apply the update. Please ensure the application is closed and try again.`n`nError: `n$($_)`n`nLog file: `n$log"
-        [System.Windows.Forms.MessageBox]::Show($errorMsg, "Update Failed", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
-        
-        exit 1
-    }
-
-    if ($Restart) {
-        try {
-            $originalArgsArray = if ($OriginalArgs) { $OriginalArgs -split ' ' } else { @() }
-            if ($Target.ToLower().EndsWith('.ps1')) {
-                "$((Get-Date).ToString('o')) - Starting PS with args: -File $Target $originalArgsArray" | Out-File -FilePath $log -Append
-                Start-Process -FilePath 'powershell.exe' -ArgumentList (@('-NoProfile','-ExecutionPolicy','Bypass','-File',$Target) + $originalArgsArray)
-            } else {
-                "$((Get-Date).ToString('o')) - Starting exe: $Target $originalArgsArray" | Out-File -FilePath $log -Append
-                Start-Process -FilePath $Target -ArgumentList $originalArgsArray
-            }
-            "$((Get-Date).ToString('o')) - Start-Process invoked successfully" | Out-File -FilePath $log -Append
-        } catch { "$((Get-Date).ToString('o')) - Failed to start process: $_" | Out-File -FilePath $log -Append }
-    }
-
-    try { Remove-Item -Path $Source -ErrorAction SilentlyContinue } catch { }
-    Start-Sleep -Milliseconds 200
-    try { Remove-Item -Path $MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue } catch { }
-
-} catch {
-    # This will catch errors from the main body of the script.
-    $errorDetails = $_ | Out-String
-    $message = "A critical error occurred in the updater script.`n`nError: $errorDetails"
-    "$((Get-Date).ToString('o')) - $message" | Out-File -FilePath $ErrorLogPath -Append
-    
     Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
-    [System.Windows.Forms.MessageBox]::Show($message, "Updater Critical Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
-}
-'@
+    $msg = "A new version ($remoteVersion) has been downloaded and is ready to be installed.`n`nPlease close the Zoiper Configurator and then click OK to complete installation. You will need to relaunch the application manually after installation."
+    [System.Windows.Forms.MessageBox]::Show($msg, "Update Ready", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
 
-        Set-Content -Path $updaterPath -Value $updaterScript -Encoding UTF8
-
-        # Pre-launch debug info (written by the main process)
-        try {
-            $preLogDir = Join-Path $env:TEMP 'zoiper_logs'
-            try { [IO.Directory]::CreateDirectory($preLogDir) | Out-Null } catch { }
-            $prelog = Join-Path $preLogDir 'zoiper_updater_prelaunch.log'
-            "$(Get-Date -Format o) - Updater script written to: $updaterPath" | Out-File -FilePath $prelog -Append -Encoding UTF8
-            "$(Get-Date -Format o) - Updater script exists: $(Test-Path $updaterPath)" | Out-File -FilePath $prelog -Append -Encoding UTF8
-            "$(Get-Date -Format o) - Temp download path: $temp" | Out-File -FilePath $prelog -Append -Encoding UTF8
-        } catch { }
-
-        $processArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $updaterPath, '--', '-Target', $targetPath, '-Source', $temp, '-ParentPid', $parentPid)
-        if ($RestartAfterUpdate) { $processArgs += '-Restart' }
-        $logDir = Join-Path $env:TEMP 'zoiper_logs'
-        $processArgs += '-LogDirectory', $logDir
-        $originalArgsStr = $global:OriginalArgs -join ' '
-        if (-not [string]::IsNullOrWhiteSpace($originalArgsStr)) {
-            $processArgs += '-OriginalArgs', $originalArgsStr
-        }
-
-        try {
-            "$(Get-Date -Format o) - Starting updater process. Arg count: $($processArgs.Count). Args: $($processArgs -join ' ')" | Out-File -FilePath $prelog -Append -Encoding UTF8
-            Start-Process -FilePath 'powershell' -ArgumentList $processArgs -WindowStyle Hidden
-            "$(Get-Date -Format o) - Updater process started successfully" | Out-File -FilePath $prelog -Append -Encoding UTF8
-        } catch {
-            "$(Get-Date -Format o) - Failed to start updater process: $_" | Out-File -FilePath $prelog -Append -Encoding UTF8
-            Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
-            $errorMsg = "Could not start the updater process.`n`nError: `n$($_)"
-            [System.Windows.Forms.MessageBox]::Show($errorMsg, "Update Failed", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
-        }
-
-        Write-Host "Update downloaded; returning to trigger graceful exit." -ForegroundColor Yellow
+    $backup = "$targetPath.old"
+    try {
+        if (Test-Path -Path $targetPath) { Move-Item -Path $targetPath -Destination $backup -Force -ErrorAction Stop }
+        Copy-Item -Path $temp -Destination $targetPath -Force -ErrorAction Stop
+        if (Test-Path -Path $backup) { Remove-Item -Path $backup -Force -ErrorAction SilentlyContinue }
         return [PSCustomObject]@{ Status = 'Updated'; RebootRequired = $true }
     }
-    return [PSCustomObject]@{ Status = 'NoUpdate'; RebootRequired = $false }
+    catch {
+        [System.Windows.Forms.MessageBox]::Show("The update could not be installed automatically. Please close any running instances and copy the file:`n$temp`nto:`n$targetPath","Update Failed",[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+        return [PSCustomObject]@{ Status = 'CopyFailed'; RebootRequired = $false }
+    }
+    finally {
+        try { Remove-Item -Path $temp -ErrorAction SilentlyContinue } catch { }
+    }
 }
 
+ 
+# Central update configuration and auto-check
+$ScriptUpdateConfig = @{
+    AutoCheck = $true
+    UpdateUrl  = Get-LatestReleaseUrl -Owner $GitHubOwner -Repo $GitHubRepo -Branch $GitHubBranch -ReleasesPath $GitHubReleasesPath -PreferredExt '.ps1'
+}
+
+if ($ScriptUpdateConfig.AutoCheck -and $ScriptUpdateConfig.UpdateUrl) {
+    $autoUpdateResult = Invoke-SelfUpdate -UpdateUrl $ScriptUpdateConfig.UpdateUrl
+    if ($autoUpdateResult -and $autoUpdateResult.RebootRequired) { exit }
+}
 
 Write-Host "Starting Zoiper 5 Setup..." -ForegroundColor Cyan
-
-
-
 
 # Load Windows Forms assembly
 Add-Type -AssemblyName System.Windows.Forms
@@ -806,51 +331,40 @@ $updateButton.Size = New-Object System.Drawing.Size(150, 35)
 $tabAbout.Controls.Add($updateButton)
 
 $updateButton.Add_Click({
-        $updateResult = $null
-        if ($ScriptUpdateConfig.UpdateUrl) {
-            $updateResult = Invoke-SelfUpdate -UpdateUrl $ScriptUpdateConfig.UpdateUrl
-        }
-        elseif ($ScriptUpdateConfig.GitHubOwner -and $ScriptUpdateConfig.GitHubRepo) {
-            [System.Windows.Forms.MessageBox]::Show("Update via GitHub is not supported in this version.", "Update Check", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-            return
+    if (-not $ScriptUpdateConfig.UpdateUrl) {
+        [System.Windows.Forms.MessageBox]::Show("No update source configured.", "Update Check", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        return
+    }
+
+    $updateResult = Invoke-SelfUpdate -UpdateUrl $ScriptUpdateConfig.UpdateUrl
+
+    if ($updateResult -and $updateResult.Status -in @('DownloadFailed','CopyFailed')) {
+        [System.Windows.Forms.MessageBox]::Show("The update could not be completed. Please try again later.", "Update Check", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+        return
+    }
+
+    if ($updateResult -and $updateResult.RebootRequired) {
+        $form.DialogResult = [System.Windows.Forms.DialogResult]::Abort
+        return
+    }
+
+    if (-not $updateResult -or $updateResult.Status -eq 'NoUpdate') {
+        $msg = if (-not $updateResult) {
+            "Could not find a newer version. Would you like to force reinstall the current version?"
         }
         else {
-            [System.Windows.Forms.MessageBox]::Show("No update source configured.", "Update Check", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-            return
+            "You are currently on the latest version. Would you like to force an update anyway?"
         }
 
-        if ($updateResult -and $updateResult.RebootRequired) {
-            $form.DialogResult = [System.Windows.Forms.DialogResult]::Abort
-            return
-        }
-
-        # If no update was found OR download failed, offer force update
-        if (-not $updateResult -or $updateResult.Status -eq 'NoUpdate') {
-            $msg = if (-not $updateResult) {
-                "Could not find a newer version. Would you like to force reinstall the current version?"
-            }
-            else {
-                "You are currently on the latest version. Would you like to force an update anyway?"
-            }
-            
-            $res = [System.Windows.Forms.MessageBox]::Show($msg, "Update Check", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
-            if ($res -eq [System.Windows.Forms.DialogResult]::Yes) {
-                $forceResult = $null
-                if ($ScriptUpdateConfig.UpdateUrl) {
-                    $forceResult = Invoke-SelfUpdate -UpdateUrl $ScriptUpdateConfig.UpdateUrl -Force
-                }
-                else {
-                    [System.Windows.Forms.MessageBox]::Show("Update via GitHub is not supported in this version.", "Update Check", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
-                    return
-                }
-
-                if ($forceResult -and $forceResult.RebootRequired) {
-                    $form.DialogResult = [System.Windows.Forms.DialogResult]::Abort
-                    return
-                }
+        $res = [System.Windows.Forms.MessageBox]::Show($msg, "Update Check", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
+        if ($res -eq [System.Windows.Forms.DialogResult]::Yes) {
+            $forceResult = Invoke-SelfUpdate -UpdateUrl $ScriptUpdateConfig.UpdateUrl -Force
+            if ($forceResult -and $forceResult.RebootRequired) {
+                $form.DialogResult = [System.Windows.Forms.DialogResult]::Abort
             }
         }
-    })
+    }
+})
 
 # Separator line
 $line = New-Object System.Windows.Forms.Label
@@ -883,4 +397,5 @@ $form.TopMost = $true
 # Show the dialog
 
 $result = $form.ShowDialog()
+
 
