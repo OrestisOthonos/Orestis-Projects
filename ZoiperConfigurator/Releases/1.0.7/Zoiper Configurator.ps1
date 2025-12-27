@@ -17,7 +17,7 @@ $ScriptUpdateConfig = @{
     # Path to the releases folder in the repo
     GitHubPath   = 'ZoiperConfigurator/Releases'
     
-    AutoCheck    = $false # Set to $true to check for updates automatically on start
+    AutoCheck    = $true # Set to $true to check for updates automatically on start
 }
 
 # Capture original command line arguments for relaunch after update
@@ -468,6 +468,9 @@ try {
         "$((Get-Date).ToString('o')) - Removing backup file $backupPath" | Out-File -FilePath $log -Append
         Remove-Item -Path $backupPath -Force -ErrorAction SilentlyContinue
     }
+
+    Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+    [System.Windows.Forms.MessageBox]::Show("Zoiper Configurator has been updated successfully. You can now relaunch the application.", "Update Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
 } catch {
     "$((Get-Date).ToString('o')) - Update failed during file operations: $_" | Out-File -FilePath $log -Append
     if (Test-Path -Path $backupPath) {
