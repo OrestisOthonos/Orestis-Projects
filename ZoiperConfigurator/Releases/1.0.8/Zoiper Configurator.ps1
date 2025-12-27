@@ -1,7 +1,7 @@
 # Zoiper 5 Setup Helper
 # This script prompts the user for Zoiper 5 credentials.
-$ScriptVersion = '1.0.8'
 
+$ScriptVersion = '1.0.8'
 
 # --- Self-update configuration ---
 # GitHub repo info for update discovery
@@ -9,6 +9,54 @@ $GitHubOwner = 'OrestisOthonos'
 $GitHubRepo = 'Orestis-Projects'
 $GitHubBranch = 'main'
 $GitHubReleasesPath = 'ZoiperConfigurator/Releases'
+
+# --- Self-update at startup (moved to top) ---
+$autoUpdateUrl = Get-LatestReleaseUrl -Owner $GitHubOwner -Repo $GitHubRepo -Branch $GitHubBranch -ReleasesPath $GitHubReleasesPath -PreferredExt '.ps1'
+if ($autoUpdateUrl) {
+    $localVersion = $ScriptVersion
+    $remoteVersion = try {
+        $tempVerFile = Join-Path $env:TEMP ("zoiper_update_ver_" + [IO.Path]::GetRandomFileName() + ".ps1")
+        Invoke-WebRequest -Uri $autoUpdateUrl -OutFile $tempVerFile -UseBasicParsing -ErrorAction Stop
+        $ver = (Select-String -Path $tempVerFile -Pattern "\$ScriptVersion = '([0-9.]+)'" | ForEach-Object { $_.Matches[0].Groups[1].Value })
+        Remove-Item $tempVerFile -Force -ErrorAction SilentlyContinue
+        $ver
+    } catch { $null }
+    if ($remoteVersion -and ([version]$remoteVersion -gt [version]$localVersion)) {
+        # Show update found dialog
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+        [System.Windows.Forms.MessageBox]::Show("A new version ($remoteVersion) was found. The Zoiper Configurator will close and update. Please relaunch it from the same location after the update.", "Update Available", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+        # Start updater script
+        $scriptPath = $MyInvocation.MyCommand.Path
+        $isExe = $scriptPath.ToLower().EndsWith('.exe')
+        $tempUpdate = Join-Path $env:TEMP ("zoiper_update_" + [IO.Path]::GetRandomFileName() + $(if ($isExe) {'.exe'} else {'.ps1'}))
+        $updaterPath = Join-Path $env:TEMP ("zoiper_updater_" + [IO.Path]::GetRandomFileName() + ".ps1")
+        $updaterCode = @"
+param([string]`target, [string]`updateUrl, [int]`parentPid)
+try {
+    # Download update
+    Invoke-WebRequest -Uri `updateUrl -OutFile "_new" -UseBasicParsing -ErrorAction Stop
+    $newFile = Join-Path (Split-Path `target) "_new"
+    Move-Item -Path "_new" -Destination $newFile -Force
+    # Close parent
+    try { Stop-Process -Id `parentPid -Force } catch { }
+    for ($i=0; $i -lt 10; $i++) {
+        if (-not (Get-Process -Id `parentPid -ErrorAction SilentlyContinue)) { break }
+        Start-Sleep -Seconds 1
+    }
+    Move-Item -Path $newFile -Destination `target -Force
+    # Relaunch
+    if (`target.ToLower().EndsWith('.ps1')) {
+        Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',`target
+    } else {
+        Start-Process `target
+    }
+} catch { }
+"@
+        Set-Content -Path $updaterPath -Value $updaterCode
+        Start-Process powershell -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-File",$updaterPath,"-target",$scriptPath,"-updateUrl",$autoUpdateUrl,"-parentPid",$PID
+        exit
+    }
+}
 
 function Get-LatestReleaseUrl {
     param(
@@ -836,50 +884,3 @@ $form.TopMost = $true
 
 $result = $form.ShowDialog()
 
-# --- Self-update at startup ---
-$autoUpdateUrl = Get-LatestReleaseUrl -Owner $GitHubOwner -Repo $GitHubRepo -Branch $GitHubBranch -ReleasesPath $GitHubReleasesPath -PreferredExt '.ps1'
-if ($autoUpdateUrl) {
-    $localVersion = $ScriptVersion
-    $remoteVersion = try {
-        $tempVerFile = Join-Path $env:TEMP ("zoiper_update_ver_" + [IO.Path]::GetRandomFileName() + ".ps1")
-        Invoke-WebRequest -Uri $autoUpdateUrl -OutFile $tempVerFile -UseBasicParsing -ErrorAction Stop
-        $ver = (Select-String -Path $tempVerFile -Pattern "\$ScriptVersion = '([0-9.]+)'" | ForEach-Object { $_.Matches[0].Groups[1].Value })
-        Remove-Item $tempVerFile -Force -ErrorAction SilentlyContinue
-        $ver
-    } catch { $null }
-    if ($remoteVersion -and ([version]$remoteVersion -gt [version]$localVersion)) {
-        # Show update found dialog
-        Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
-        [System.Windows.Forms.MessageBox]::Show("A new version ($remoteVersion) was found. The Zoiper Configurator will close and update. Please relaunch it from the same location after the update.", "Update Available", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
-        # Start updater script
-        $scriptPath = $MyInvocation.MyCommand.Path
-        $isExe = $scriptPath.ToLower().EndsWith('.exe')
-        $tempUpdate = Join-Path $env:TEMP ("zoiper_update_" + [IO.Path]::GetRandomFileName() + $(if ($isExe) {'.exe'} else {'.ps1'}))
-        $updaterPath = Join-Path $env:TEMP ("zoiper_updater_" + [IO.Path]::GetRandomFileName() + ".ps1")
-        $updaterCode = @"
-param([string] target, [string] updateUrl, [int] parentPid)
-try {
-    # Download update
-    Invoke-WebRequest -Uri  updateUrl -OutFile "_new" -UseBasicParsing -ErrorAction Stop
-    $newFile = Join-Path (Split-Path  target) "_new"
-    Move-Item -Path "_new" -Destination $newFile -Force
-    # Close parent
-    try { Stop-Process -Id  parentPid -Force } catch { }
-    for ($i=0; $i -lt 10; $i++) {
-        if (-not (Get-Process -Id  parentPid -ErrorAction SilentlyContinue)) { break }
-        Start-Sleep -Seconds 1
-    }
-    Move-Item -Path $newFile -Destination  target -Force
-    # Relaunch
-    if ( target.ToLower().EndsWith('.ps1')) {
-        Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File', target
-    } else {
-        Start-Process  target
-    }
-} catch { }
-"@
-        Set-Content -Path $updaterPath -Value $updaterCode
-        Start-Process powershell -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-File",$updaterPath,"-target",$scriptPath,"-updateUrl",$autoUpdateUrl,"-parentPid",$PID
-        exit
-    }
-}
