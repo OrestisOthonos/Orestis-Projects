@@ -1,6 +1,6 @@
 # Zoiper 5 Setup Helper
 # This script prompts the user for Zoiper 5 credentials.
-$ScriptVersion = '1.0.8'
+$ScriptVersion = '1.0.7'
 
 # --- Self-update configuration ---
 # Set `UpdateUrl` to your public release download URL or leave empty and use the
@@ -433,78 +433,91 @@ function Invoke-PublicUpdate {
         $parentPid = $PID
 
         $updaterScript = @'
-param(
-    [string]$Target,
-    [string]$Source,
-    [int]$ParentPid,
-    [switch]$Restart,
-    [string]$LogDirectory,
-    [string]$OriginalArgs
-)
-
-try { [IO.Directory]::CreateDirectory($LogDirectory) | Out-Null } catch { }
-$log = Join-Path $LogDirectory 'zoiper_updater_debug.log'
-"$((Get-Date).ToString('o')) - Updater started. Target=$Target Source=$Source ParentPid=$ParentPid Restart=$Restart OriginalArgs='$OriginalArgs'" | Out-File -FilePath $log -Append
-
-$maxWaitSeconds = 60
-$startTime = Get-Date
-while (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue) {
-    if ((Get-Date) - $startTime -gt [TimeSpan]::FromSeconds($maxWaitSeconds)) {
-        "$((Get-Date).ToString('o')) - Timeout waiting for parent PID $ParentPid after $maxWaitSeconds seconds; continuing with update." | Out-File -FilePath $log -Append
-        break
-    }
-    Start-Sleep -Milliseconds 300
-}
-
-$backupPath = "$Target.old"
+# Hardcoded log for top-level errors
+$ErrorLogPath = Join-Path $env:TEMP 'zoiper_updater_bootstrap_error.log'
 try {
-    if (Test-Path -Path $Target) {
-        "$((Get-Date).ToString('o')) - Renaming target $Target to $backupPath" | Out-File -FilePath $log -Append
-        Move-Item -Path $Target -Destination $backupPath -Force -ErrorAction Stop
-    }
+    param(
+        [string]$Target,
+        [string]$Source,
+        [int]$ParentPid,
+        [switch]$Restart,
+        [string]$LogDirectory,
+        [string]$OriginalArgs
+    )
 
-    "$((Get-Date).ToString('o')) - Copying $Source -> $Target" | Out-File -FilePath $log -Append
-    Copy-Item -Path $Source -Destination $Target -Force -ErrorAction Stop
-    "$((Get-Date).ToString('o')) - Copy succeeded" | Out-File -FilePath $log -Append
-    
-    if (Test-Path -Path $backupPath) {
-        "$((Get-Date).ToString('o')) - Removing backup file $backupPath" | Out-File -FilePath $log -Append
-        Remove-Item -Path $backupPath -Force -ErrorAction SilentlyContinue
-    }
+    try { [IO.Directory]::CreateDirectory($LogDirectory) | Out-Null } catch { }
+    $log = Join-Path $LogDirectory 'zoiper_updater_debug.log'
+    "$((Get-Date).ToString('o')) - Updater started. Target=$Target Source=$Source ParentPid=$ParentPid Restart=$Restart OriginalArgs='$OriginalArgs'" | Out-File -FilePath $log -Append
 
-    Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
-    [System.Windows.Forms.MessageBox]::Show("Zoiper Configurator has been updated successfully. You can now relaunch the application.", "Update Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
-} catch {
-    "$((Get-Date).ToString('o')) - Update failed during file operations: $_" | Out-File -FilePath $log -Append
-    if (Test-Path -Path $backupPath) {
-        "$((Get-Date).ToString('o')) - Attempting to restore backup from $backupPath" | Out-File -FilePath $log -Append
-        Move-Item -Path $backupPath -Destination $Target -Force -ErrorAction SilentlyContinue
-    }
-
-    Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
-    $errorMsg = "Failed to apply the update. Please ensure the application is closed and try again.`n`nError: `n$($_)`n`nLog file: `n$log"
-    [System.Windows.Forms.MessageBox]::Show($errorMsg, "Update Failed", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
-    
-    exit 1
-}
-
-if ($Restart) {
-    try {
-        $originalArgsArray = if ($OriginalArgs) { $OriginalArgs -split ' ' } else { @() }
-        if ($Target.ToLower().EndsWith('.ps1')) {
-            "$((Get-Date).ToString('o')) - Starting PS with args: -File $Target $originalArgsArray" | Out-File -FilePath $log -Append
-            Start-Process -FilePath 'powershell.exe' -ArgumentList (@('-NoProfile','-ExecutionPolicy','Bypass','-File',$Target) + $originalArgsArray)
-        } else {
-            "$((Get-Date).ToString('o')) - Starting exe: $Target $originalArgsArray" | Out-File -FilePath $log -Append
-            Start-Process -FilePath $Target -ArgumentList $originalArgsArray
+    $maxWaitSeconds = 60
+    $startTime = Get-Date
+    while (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue) {
+        if ((Get-Date) - $startTime -gt [TimeSpan]::FromSeconds($maxWaitSeconds)) {
+            "$((Get-Date).ToString('o')) - Timeout waiting for parent PID $ParentPid after $maxWaitSeconds seconds; continuing with update." | Out-File -FilePath $log -Append
+            break
         }
-        "$((Get-Date).ToString('o')) - Start-Process invoked successfully" | Out-File -FilePath $log -Append
-    } catch { "$((Get-Date).ToString('o')) - Failed to start process: $_" | Out-File -FilePath $log -Append }
-}
+        Start-Sleep -Milliseconds 300
+    }
 
-try { Remove-Item -Path $Source -ErrorAction SilentlyContinue } catch { }
-Start-Sleep -Milliseconds 200
-try { Remove-Item -Path $MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue } catch { }
+    $backupPath = "$Target.old"
+    try {
+        if (Test-Path -Path $Target) {
+            "$((Get-Date).ToString('o')) - Renaming target $Target to $backupPath" | Out-File -FilePath $log -Append
+            Move-Item -Path $Target -Destination $backupPath -Force -ErrorAction Stop
+        }
+
+        "$((Get-Date).ToString('o')) - Copying $Source -> $Target" | Out-File -FilePath $log -Append
+        Copy-Item -Path $Source -Destination $Target -Force -ErrorAction Stop
+        "$((Get-Date).ToString('o')) - Copy succeeded" | Out-File -FilePath $log -Append
+        
+        if (Test-Path -Path $backupPath) {
+            "$((Get-Date).ToString('o')) - Removing backup file $backupPath" | Out-File -FilePath $log -Append
+            Remove-Item -Path $backupPath -Force -ErrorAction SilentlyContinue
+        }
+
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+        [System.Windows.Forms.MessageBox]::Show("Zoiper Configurator has been updated successfully. You can now relaunch the application.", "Update Complete", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+    } catch {
+        "$((Get-Date).ToString('o')) - Update failed during file operations: $_" | Out-File -FilePath $log -Append
+        if (Test-Path -Path $backupPath) {
+            "$((Get-Date).ToString('o')) - Attempting to restore backup from $backupPath" | Out-File -FilePath $log -Append
+            Move-Item -Path $backupPath -Destination $Target -Force -ErrorAction SilentlyContinue
+        }
+
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+        $errorMsg = "Failed to apply the update. Please ensure the application is closed and try again.`n`nError: `n$($_)`n`nLog file: `n$log"
+        [System.Windows.Forms.MessageBox]::Show($errorMsg, "Update Failed", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+        
+        exit 1
+    }
+
+    if ($Restart) {
+        try {
+            $originalArgsArray = if ($OriginalArgs) { $OriginalArgs -split ' ' } else { @() }
+            if ($Target.ToLower().EndsWith('.ps1')) {
+                "$((Get-Date).ToString('o')) - Starting PS with args: -File $Target $originalArgsArray" | Out-File -FilePath $log -Append
+                Start-Process -FilePath 'powershell.exe' -ArgumentList (@('-NoProfile','-ExecutionPolicy','Bypass','-File',$Target) + $originalArgsArray)
+            } else {
+                "$((Get-Date).ToString('o')) - Starting exe: $Target $originalArgsArray" | Out-File -FilePath $log -Append
+                Start-Process -FilePath $Target -ArgumentList $originalArgsArray
+            }
+            "$((Get-Date).ToString('o')) - Start-Process invoked successfully" | Out-File -FilePath $log -Append
+        } catch { "$((Get-Date).ToString('o')) - Failed to start process: $_" | Out-File -FilePath $log -Append }
+    }
+
+    try { Remove-Item -Path $Source -ErrorAction SilentlyContinue } catch { }
+    Start-Sleep -Milliseconds 200
+    try { Remove-Item -Path $MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue } catch { }
+
+} catch {
+    # This will catch errors from param block, logging setup, etc.
+    $errorDetails = $_ | Out-String
+    $message = "A critical error occurred in the updater script.`n`nError: $errorDetails"
+    "$((Get-Date).ToString('o')) - $message" | Out-File -FilePath $ErrorLogPath -Append
+    
+    Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+    [System.Windows.Forms.MessageBox]::Show($message, "Updater Critical Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+}
 '@
 
         $updaterScript | Out-File -FilePath $updaterPath -Encoding UTF8
