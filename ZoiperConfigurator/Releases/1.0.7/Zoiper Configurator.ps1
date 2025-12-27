@@ -520,7 +520,7 @@ try {
 }
 '@
 
-        $updaterScript | Out-File -FilePath $updaterPath -Encoding UTF8
+        Set-Content -Path $updaterPath -Value $updaterScript -Encoding UTF8
 
         # Pre-launch debug info (written by the main process)
         try {
